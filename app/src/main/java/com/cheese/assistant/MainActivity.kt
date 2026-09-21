@@ -19,7 +19,9 @@ import com.cheese.assistant.board.Position
 import com.cheese.assistant.engine.SearchController
 import com.cheese.assistant.service.AssistantService
 import com.cheese.assistant.ui.BoardView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -65,6 +67,24 @@ class MainActivity : AppCompatActivity() {
 
         btnAnalyze.setOnClickListener { analyze() }
         findViewById<Button>(R.id.btnOverlay).setOnClickListener { toggleOverlay() }
+        findViewById<Button>(R.id.btnCapture).setOnClickListener { testCapture() }
+    }
+
+    /** 截屏链路验证：授权 → 抓一帧 → Toast 报告分辨率 */
+    private fun testCapture() {
+        if (!com.cheese.assistant.capture.ScreenCapture.isRunning) {
+            startActivity(Intent(this, com.cheese.assistant.capture.CapturePermissionActivity::class.java))
+            Toast.makeText(this, "授权后请再点一次此按钮验证抓屏", Toast.LENGTH_LONG).show()
+            return
+        }
+        lifecycleScope.launch(Dispatchers.IO) {
+            val bmp = com.cheese.assistant.capture.ScreenCapture.capture()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(applicationContext,
+                    if (bmp != null) "抓屏成功: ${bmp.width}x${bmp.height}" else "抓屏失败",
+                    Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** 悬浮窗模式：授权检查 → 启动前台服务，由服务持有引擎和信息条 */
