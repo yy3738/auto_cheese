@@ -5,4 +5,5 @@
     <string name="reset">摆开局</string>
     <string name="clear">清空</string>
     <string name="start_engine">启动引擎</string>
+    <string name="toggle_overlay">悬浮窗分析（其他 App 上层）</string>
 </resources>

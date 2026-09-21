@@ -1,18 +1,23 @@
 package com.cheese.assistant
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ListView
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.cheese.assistant.board.MoveFormatter
 import com.cheese.assistant.board.Piece
 import com.cheese.assistant.board.Position
 import com.cheese.assistant.engine.SearchController
+import com.cheese.assistant.service.AssistantService
 import com.cheese.assistant.ui.BoardView
 import kotlinx.coroutines.launch
 
@@ -59,7 +64,30 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnAnalyze.setOnClickListener { analyze() }
+        findViewById<Button>(R.id.btnOverlay).setOnClickListener { toggleOverlay() }
     }
+
+    /** 悬浮窗模式：授权检查 → 启动前台服务，由服务持有引擎和信息条 */
+    private fun toggleOverlay() {
+        if (!Settings.canDrawOverlays(this)) {
+            startActivity(Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")))
+            Toast.makeText(this, "请授予\"显示在其他应用上层\"权限", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (AssistantService.isRunning) {
+            startService(overlayIntent(AssistantService.Action.STOP, ""))
+        } else {
+            startService(overlayIntent(AssistantService.Action.ANALYZE, boardView.position.toFen()))
+        }
+    }
+
+    private fun overlayIntent(action: String, fen: String): Intent =
+        Intent(this, AssistantService::class.java).apply {
+            this.action = action
+            putExtra(AssistantService.Extra.FEN, fen)
+        }
 
     private fun analyze() {
         val ctl = controller
