@@ -1,0 +1,16 @@
+# Android / Gradle
+*.iml
+.gradle/
+build/
+local.properties
+.idea/
+.cxx/
+captures/
+.externalNativeBuild/
+
+# 下载的引擎产物（NNUE 权重经 assets 打包进仓库的是另一份）
+docs/pikafish/
+
+# 系统
+.DS_Store
+Thumbs.db
