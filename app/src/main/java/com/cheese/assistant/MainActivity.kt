@@ -68,6 +68,46 @@ class MainActivity : AppCompatActivity() {
         btnAnalyze.setOnClickListener { analyze() }
         findViewById<Button>(R.id.btnOverlay).setOnClickListener { toggleOverlay() }
         findViewById<Button>(R.id.btnCapture).setOnClickListener { testCapture() }
+        findViewById<Button>(R.id.btnRecognize).setOnClickListener { testRecognize() }
+    }
+
+    /**
+     * 识别流程：与校准相同的倒计时抓屏，然后直接进识别工作台
+     * （采样模板 → 识别 → 应用到主棋盘核对）
+     */
+    private fun testRecognize() {
+        if (!com.cheese.assistant.capture.ScreenCapture.isRunning) {
+            startActivity(Intent(this, com.cheese.assistant.capture.CapturePermissionActivity::class.java))
+            Toast.makeText(this, "授权后请再点一次此按钮", Toast.LENGTH_LONG).show()
+            return
+        }
+        val target = "default"
+        if (!com.cheese.assistant.capture.CalibrateActivity.calibrationFile(this, "default").exists()) {
+            Toast.makeText(this, "请先完成棋盘校准", Toast.LENGTH_LONG).show()
+            testCapture()
+            return
+        }
+        Toast.makeText(this, "请在 3 秒内切换到目标棋盘界面", Toast.LENGTH_LONG).show()
+        lifecycleScope.launch {
+            kotlinx.coroutines.delay(3000)
+            val ok = withContext(Dispatchers.IO) {
+                com.cheese.assistant.capture.ScreenCapture.captureToCache()
+            }
+            if (!ok) { Toast.makeText(this@MainActivity, "截屏失败", Toast.LENGTH_SHORT).show(); return@launch }
+            startActivity(android.content.Intent(this@MainActivity,
+                com.cheese.assistant.recognize.RecognizeActivity::class.java)
+                .putExtra(com.cheese.assistant.recognize.RecognizeActivity.EXTRA_TARGET_APP,
+                    "default"))
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        com.cheese.assistant.recognize.RecognizeActivity.lastApplied?.let { pos ->
+            boardView.position = pos
+            fenView.setText(pos.toFen())
+            com.cheese.assistant.recognize.RecognizeActivity.lastApplied = null
+        }
     }
 
     /**

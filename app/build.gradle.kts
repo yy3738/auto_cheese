@@ -21,6 +21,7 @@ android {
                 arguments += "-DANDROID_STL=c++_shared"
             }
         }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     externalNativeBuild {
@@ -56,4 +57,6 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     // OpenCV 将以本地 aar 或源码模块形式加入，待骨架跑通后接入
     implementation("org.opencv:opencv:4.10.0")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.1")
 }

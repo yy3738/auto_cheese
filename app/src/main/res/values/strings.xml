@@ -7,4 +7,5 @@
     <string name="start_engine">启动引擎</string>
     <string name="toggle_overlay">悬浮窗分析（其他 App 上层）</string>
     <string name="calibrate">截屏校准棋盘</string>
+    <string name="recognize">截屏识别棋盘</string>
 </resources>

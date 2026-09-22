@@ -32,6 +32,10 @@
             android:name=".capture.CalibrateActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".recognize.RecognizeActivity"
+            android:exported="false" />
+
         <service
             android:name=".service.AssistantService"
             android:exported="false"
