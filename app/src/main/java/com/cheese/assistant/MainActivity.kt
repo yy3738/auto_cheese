@@ -70,20 +70,29 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnCapture).setOnClickListener { testCapture() }
     }
 
-    /** 截屏链路验证：授权 → 抓一帧 → Toast 报告分辨率 */
+    /**
+     * 校准流程：退后台 → 用户 3 秒内切到目标棋盘 → 自动抓屏 → 弹悬浮「校准」按钮
+     * （悬浮窗点击可合法启动 Activity，规避后台启动限制）
+     */
     private fun testCapture() {
-        if (!com.cheese.assistant.capture.ScreenCapture.isRunning) {
-            startActivity(Intent(this, com.cheese.assistant.capture.CapturePermissionActivity::class.java))
-            Toast.makeText(this, "授权后请再点一次此按钮验证抓屏", Toast.LENGTH_LONG).show()
+        if (!Settings.canDrawOverlays(this)) {
+            startActivity(Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")))
             return
         }
-        lifecycleScope.launch(Dispatchers.IO) {
-            val bmp = com.cheese.assistant.capture.ScreenCapture.capture()
-            withContext(Dispatchers.Main) {
-                Toast.makeText(applicationContext,
-                    if (bmp != null) "抓屏成功: ${bmp.width}x${bmp.height}" else "抓屏失败",
-                    Toast.LENGTH_SHORT).show()
+        if (!com.cheese.assistant.capture.ScreenCapture.isRunning) {
+            startActivity(Intent(this, com.cheese.assistant.capture.CapturePermissionActivity::class.java))
+            Toast.makeText(this, "授权后请再点一次此按钮", Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(this, "请在 3 秒内切换到目标棋盘界面", Toast.LENGTH_LONG).show()
+        lifecycleScope.launch {
+            kotlinx.coroutines.delay(3000)
+            withContext(Dispatchers.IO) {
+                com.cheese.assistant.capture.ScreenCapture.captureToCache()
             }
+            com.cheese.assistant.capture.CalibrateActivity.showCalibrateButton(this@MainActivity)
         }
     }
 

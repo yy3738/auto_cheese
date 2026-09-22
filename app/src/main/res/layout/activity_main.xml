@@ -70,7 +70,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="测试截屏" />
+        android:text="@string/calibrate" />
 
     <TextView
         android:id="@+id/resultView"

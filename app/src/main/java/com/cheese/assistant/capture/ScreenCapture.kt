@@ -28,6 +28,10 @@ object ScreenCapture {
     private var height = 0
     private var handlerThread: HandlerThread? = null
 
+    /** 最近一帧缓存：倒计时抓屏后由校准界面读取 */
+    var lastFrame: Bitmap? = null
+        private set
+
     /** 结果码 + 数据由授权 Activity 转交过来 */
     fun start(context: Context, resultCode: Int, data: android.content.Intent) {
         stop()
@@ -46,6 +50,13 @@ object ScreenCapture {
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             imageReader!!.surface, null,
             Handler(handlerThread!!.looper))
+    }
+
+    /** 抓一帧并缓存到 lastFrame，返回是否成功 */
+    fun captureToCache(): Boolean {
+        val bmp = capture() ?: return false
+        lastFrame = bmp
+        return true
     }
 
     /** 抓一帧；virtualDisplay.resize 首帧渲染需要一点时间 */
