@@ -109,6 +109,7 @@ object Features {
         val win = Bitmap.createBitmap(bmp, x0, y0, x1 - x0, y1 - y0)
         val wpx = IntArray(win.width * win.height)
         win.getPixels(wpx, 0, win.width, 0, 0, win.width, win.height)
+        removeRedOverlay(wpx, win.width, win.height)
 
         val gray = FloatArray(T * T)
         val rCh = FloatArray(T * T)
@@ -166,6 +167,48 @@ object Features {
     private fun median(a: FloatArray): Float {
         val v = a.copyOf(); v.sort()
         return v[v.size / 2]
+    }
+
+    /**
+     * JJ 等棋盘 App 会在棋盘上画纯红落子/选中标记框，混入查询窗口会污染
+     * NCC（实测仕/车距离差从 0.013 收窄到修复后 0.03 级余量）。把标记像素
+     * （亮度高且 R 远超 G/B）膨胀 1px 吃掉抗锯齿晕，替换为窗口中值灰度。
+     * 红棋字色 R≈137 低于标记 R≈201，不受影响。
+     */
+    private fun removeRedOverlay(wpx: IntArray, w: Int, h: Int) {
+        val ov = BooleanArray(wpx.size)
+        var any = false
+        for (i in wpx.indices) {
+            val c = wpx[i]
+            val r = c shr 16 and 0xFF
+            val g = c shr 8 and 0xFF
+            val b = c and 0xFF
+            if (r > 170 && r - g > 120 && r - b > 120) { ov[i] = true; any = true }
+        }
+        if (!any) return
+        val gray = FloatArray(wpx.size)
+        for (i in wpx.indices) {
+            val c = wpx[i]
+            gray[i] = 0.299f * (c shr 16 and 0xFF) +
+                0.587f * (c shr 8 and 0xFF) + 0.114f * (c and 0xFF)
+        }
+        val keep = FloatArray(wpx.size)
+        var n = 0
+        for (i in gray.indices) if (!ov[i]) { keep[n++] = gray[i] }
+        if (n == 0) return
+        val med = median(keep.copyOf(n))
+        val dil = BooleanArray(wpx.size)
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = y * w + x
+            if (!ov[i]) continue
+            dil[i] = true
+            if (x > 0) dil[i - 1] = true
+            if (x < w - 1) dil[i + 1] = true
+            if (y > 0) dil[i - w] = true
+            if (y < h - 1) dil[i + w] = true
+        }
+        val neutral = (med.toInt() and 0xFF) * 0x10101
+        for (i in wpx.indices) if (dil[i]) wpx[i] = neutral
     }
 
     fun dist(a: F, b: F): Float {

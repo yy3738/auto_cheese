@@ -25,6 +25,10 @@ class RecognizerPortTest {
     private val EXPECTED_FEN =
         "rnbakab2/9/1c2c1n2/p1p1p1p1p/9/9/P1P1P1P1P/1C2B4/3N5/R2AKABN1 w - - 0 1"
 
+    /** 残局帧，带 JJ 红色落子标记框（曾污染窗口 NCC 使仕/车距离差收窄到 0.013） */
+    private val EXPECTED_FEN_ENDGAME =
+        "3aka3/1R7/6c2/3P5/4P4/9/9/3A5/3KA3r/9 w - - 0 1"
+
     @Test
     fun recognizeRealFrame() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
@@ -40,5 +44,22 @@ class RecognizerPortTest {
             "存在未定点: ${result.matrixText}",
             0, result.unknown.count { it })
         assertEquals(EXPECTED_FEN, result.fen)
+    }
+
+    @Test
+    fun recognizeEndgameFrameWithMarkers() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val bmpFile = java.io.File(ctx.filesDir, "test_board2.png")
+        assertTrue("缺 test_board2.png，请 adb push 到 files/", bmpFile.exists())
+        val bmp = BitmapFactory.decodeFile(bmpFile.absolutePath)
+        val grid = BoardGrid.load(ctx, "default")!!
+        val templates = TemplateStore.load(ctx, "default")
+
+        val result = BoardRecognizer.recognize(bmp, grid, templates)
+
+        assertEquals(
+            "存在未定点: ${result.matrixText}",
+            0, result.unknown.count { it })
+        assertEquals(EXPECTED_FEN_ENDGAME, result.fen)
     }
 }
