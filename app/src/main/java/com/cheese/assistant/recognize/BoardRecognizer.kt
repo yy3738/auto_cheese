@@ -30,7 +30,9 @@ object BoardRecognizer {
         val hasUnknown: Boolean get() = unknown.any { it }
     }
 
-    fun recognize(bmp: Bitmap, grid: BoardGrid, templates: TemplateStore): Result {
+    fun recognize(bmp: Bitmap, rawGrid: BoardGrid, templates: TemplateStore): Result {
+        // 线吸附：先让 90 个交叉点贴合实际棋盘线再匹配
+        val grid = GridRefiner.refine(bmp, rawGrid)
         val tmpl = templates.entries
             .filter { it.bitmap.width == Features.T && it.bitmap.height == Features.T }
             .map { it.piece to Features.of(it.bitmap) }
@@ -101,21 +103,39 @@ object Features {
         val y0 = (cy - radius).toInt().coerceIn(0, bmp.height - 2)
         val x1 = (cx + radius).toInt().coerceIn(x0 + 2, bmp.width)
         val y1 = (cy + radius).toInt().coerceIn(y0 + 2, bmp.height)
-        val window = Bitmap.createBitmap(bmp, x0, y0, x1 - x0, y1 - y0)
-        val scaled = Bitmap.createScaledBitmap(window, T, T, true)
-        val px = IntArray(T * T)
-        scaled.getPixels(px, 0, T, 0, 0, T, T)
+        // 用 BOX 区域平均缩到 24x24：Android createScaledBitmap 的双线性在
+        // ~4.7:1 缩小时每目标点只采 2x2 源像素，混叠严重导致 NCC 距离劣化
+        // （实测 (9,6) d 0.55→0.98）。模板是 BOX 缩放的，查询窗口必须一致。
+        val win = Bitmap.createBitmap(bmp, x0, y0, x1 - x0, y1 - y0)
+        val wpx = IntArray(win.width * win.height)
+        win.getPixels(wpx, 0, win.width, 0, 0, win.width, win.height)
 
         val gray = FloatArray(T * T)
         val rCh = FloatArray(T * T)
         val gCh = FloatArray(T * T)
-        for (i in px.indices) {
-            val c = px[i]
-            val r = (c shr 16 and 0xFF).toFloat()
-            val g = (c shr 8 and 0xFF).toFloat()
-            val b = (c and 0xFF).toFloat()
-            gray[i] = 0.299f * r + 0.587f * g + 0.114f * b
-            rCh[i] = r; gCh[i] = g
+        for (j in 0 until T) {
+            val sy0 = j * win.height / T
+            val sy1 = maxOf(sy0 + 1, (j + 1) * win.height / T)
+            for (i in 0 until T) {
+                val sx0 = i * win.width / T
+                val sx1 = maxOf(sx0 + 1, (i + 1) * win.width / T)
+                var sg = 0f; var sr = 0f; var sgn = 0f; var n = 0
+                for (y in sy0 until sy1) {
+                    val base = y * win.width
+                    for (x in sx0 until sx1) {
+                        val c = wpx[base + x]
+                        val r = (c shr 16 and 0xFF).toFloat()
+                        val g = (c shr 8 and 0xFF).toFloat()
+                        val b = (c and 0xFF).toFloat()
+                        sg += 0.299f * r + 0.587f * g + 0.114f * b
+                        sr += r; sgn += g; n++
+                    }
+                }
+                val idx = j * T + i
+                gray[idx] = sg / n
+                rCh[idx] = sr / n
+                gCh[idx] = sgn / n
+            }
         }
         return analyze(gray, rCh, gCh)
     }

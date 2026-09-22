@@ -96,6 +96,10 @@ class BoardGrid private constructor(
             return grid
         }
 
+        /** 由（线吸附后的）90 个显式交叉点构建，仅用于识别路径 */
+        fun fromPoints(xs: FloatArray, ys: FloatArray): BoardGrid =
+            BoardGrid(xs.copyOf(), ys.copyOf())
+
         private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
     }
 }
