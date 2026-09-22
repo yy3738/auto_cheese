@@ -165,6 +165,12 @@ class RecognizeActivity : Activity() {
 
     /** 最近邻匹配识别并显示矩阵 */
     private fun doRecognize(bmp: Bitmap) {
+        // 调试：落盘抓帧，供 PC 端 diag 复现
+        runCatching {
+            java.io.File(filesDir, "debug_last_frame.png").outputStream().use {
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+        }
         val result = BoardRecognizer.recognize(bmp, grid, templates)
         lastResult = result
         val tip = if (result.hasUnknown) "\n'？'=不确定：补充采样后重新识别" else ""

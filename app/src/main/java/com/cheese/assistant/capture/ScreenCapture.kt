@@ -54,9 +54,28 @@ object ScreenCapture {
 
     /** 抓一帧并缓存到 lastFrame，返回是否成功 */
     fun captureToCache(): Boolean {
-        val bmp = capture() ?: return false
+        val bmp = captureFresh() ?: return false
         lastFrame = bmp
         return true
+    }
+
+    /**
+     * 抓一帧新画面：先丢掉缓冲里的陈旧帧（VirtualDisplay 在后台不持续推流，
+     * acquireLatestImage 会返回几秒前的旧帧），等新帧渲染进来再取。
+     */
+    fun captureFresh(timeoutMs: Long = 2000): Bitmap? {
+        val reader = imageReader ?: return null
+        val stale = try { reader.acquireLatestImage() } catch (_: Exception) { null }
+        stale?.close()
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val image = try { reader.acquireLatestImage() } catch (_: Exception) { null }
+            if (image != null) {
+                try { return imageToBitmap(image) } finally { image.close() }
+            }
+            Thread.sleep(50)
+        }
+        return null
     }
 
     /** 抓一帧；virtualDisplay.resize 首帧渲染需要一点时间 */
