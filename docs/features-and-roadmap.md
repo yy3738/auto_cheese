@@ -67,13 +67,16 @@
 4. 收尾:清理调试日志(BoardWatcher/AutoLoop 的 Log)、关闭 dumpFrame
    或改为开关控制、提交
 
-### 阶段 B:稳定性修补
-1. **START_STICKY 重启不重建悬浮窗**:进程被杀后系统重启 service,
-   onStartCommand intent=null 时悬浮窗与 autoJob 均不重建,悬浮窗永久消失。
-   在 null intent 分支重建(悬浮窗 + 若此前处于自动模式则重启 autoLoop)
-2. 长时间运行内存观察(此前有 LOS 对象 25MB 的 GC 记录,疑似 Bitmap 缓存)
+### 阶段 B:稳定性修补(已完成,2026-09-23)
+1. ~~**START_STICKY 重启不重建悬浮窗**~~:已修。onStartCommand 收到 null
+   intent 时重建悬浮窗,按 SharedPreferences 记录的自动模式状态提示
+   「截屏授权已失效,请回主界面重新点悬浮窗按钮开启」(MediaProjection
+   授权随进程死亡,autoLoop 无法自动恢复属系统限制)。真机 am crash 验证通过。
+2. ~~**ScreenCapture lastFrame 内存**~~:已修。stop() 时释放约 8MB 的
+   lastFrame 静态 Bitmap;校准/识别工作台每次使用前会重新 captureToCache。
+   更长时程的内存观察仍值得做一次(连续运行 1 小时看 PSS 曲线)。
 
-### 阶段 C:Room 知识库 + 复盘(用户已明确的下一阶段)
+### 阶段 C:Room 知识库 + 复盘(下一阶段,用户已明确)
 1. Room 持久化:对局记录(局面序列/FEN/引擎评分/实际走法)
 2. 复盘功能:对局结束后逐步回放,对照引擎评分标注疑问手
 3. 局面知识库:按局面特征(局面类型/评分区间)积累经验数据
@@ -86,8 +89,7 @@
 
 ## 三、当前状态速览
 
-- 代码:develop 分支,悬浮窗自动识别功能已实现但**未提交**
-- 真机:闭环曾验证通过一次(识别→归一化→分析→悬浮窗显示),当前卡在
-  row0 未定点导致的「等待稳定棋盘画面」循环(详见排查文档)
-- 文档:本文档 + overlay-auto-recognize-status.md(问题清单/排查方向)+
-  CLAUDE.md(环境与测试流程)
+- 代码:develop 分支,阶段 A(悬浮窗自动识别闭环 93c7ba2)与阶段 B
+  (稳定性修补 beaa4b9)均已提交
+- 真机:自动识别→引擎分析→悬浮窗显示候选 全链路验证通过;崩溃恢复验证通过
+- 下一步:阶段 C(Room 知识库 + 复盘),细节待与用户对齐后补充
