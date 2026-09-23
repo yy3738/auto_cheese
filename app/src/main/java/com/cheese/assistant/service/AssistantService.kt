@@ -44,6 +44,9 @@ class AssistantService : Service() {
         const val NOTIFICATION_ID = 1
         const val TARGET_APP = "default"
 
+        private const val PREFS = "assistant_state"
+        private const val PREF_AUTO_ON = "auto_on"
+
         var isRunning = false
             private set
     }
@@ -62,8 +65,25 @@ class AssistantService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        if (intent == null) {
+            // START_STICKY 重启（进程曾被杀）：MediaProjection 授权已随进程
+            // 失效，autoLoop 无法自动恢复；悬浮窗权限是全局设置仍有效，
+            // 必须重建悬浮窗——否则进程崩溃后悬浮窗永久消失（文档 B.1）
+            val wasAuto = getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getBoolean(PREF_AUTO_ON, false)
+            val hint = if (wasAuto) "服务已恢复；截屏授权已失效，请回主界面重新点悬浮窗按钮开启"
+            else "服务已恢复"
+            serviceScope.launch {
+                runCatching {
+                    withContext(Dispatchers.Main) { showOverlay(hint) }
+                }.onFailure { android.util.Log.e("AssistantService", "restore overlay failed", it) }
+            }
+            return START_STICKY
+        }
+        when (intent.action) {
             Action.STOP -> {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PREF_AUTO_ON, false).apply()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -71,7 +91,11 @@ class AssistantService : Service() {
                 val fen = intent.getStringExtra(Extra.FEN) ?: return START_STICKY
                 analyze(fen)
             }
-            Action.START_AUTO -> startAutoLoop()
+            Action.START_AUTO -> {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(PREF_AUTO_ON, true).apply()
+                startAutoLoop()
+            }
         }
         return START_STICKY
     }

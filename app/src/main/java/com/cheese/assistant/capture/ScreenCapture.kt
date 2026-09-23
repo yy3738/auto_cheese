@@ -99,8 +99,8 @@ object ScreenCapture {
         return null
     }
 
-    /** 抓一帧；virtualDisplay.resize 首帧渲染需要一点时间 */
-    fun capture(staleOkMs: Long = 500): Bitmap? {
+    /** 抓一帧(校准/识别工作台在 lastFrame 缺失时兜底取当前帧) */
+    fun capture(): Bitmap? {
         val reader = imageReader ?: return null
         val image: Image = try {
             reader.acquireLatestImage() ?: return null
@@ -132,6 +132,8 @@ object ScreenCapture {
         imageReader = null
         projection?.stop()
         projection = null
+        // 释放约 8MB 的帧缓存;校准/识别工作台每次都会重新 captureToCache
+        lastFrame = null
         handlerThread?.quitSafely()
         handlerThread = null
     }
