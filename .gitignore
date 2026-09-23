@@ -11,6 +11,11 @@ captures/
 # 下载的引擎产物（NNUE 权重经 assets 打包进仓库的是另一份）
 docs/pikafish/
 
+# 排障临时文件（截图/诊断帧/识别输出）
+.scratch_*
+tools/.scratch_*
+tools/__pycache__/
+
 # 系统
 .DS_Store
 Thumbs.db

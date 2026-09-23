@@ -136,7 +136,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 悬浮窗模式：授权检查 → 启动前台服务，由服务持有引擎和信息条 */
+    /** 悬浮窗自动模式：授权检查 → 启动前台服务，自动抓帧识别并出候选 */
     private fun toggleOverlay() {
         if (!Settings.canDrawOverlays(this)) {
             startActivity(Intent(
@@ -147,9 +147,15 @@ class MainActivity : AppCompatActivity() {
         }
         if (AssistantService.isRunning) {
             startService(overlayIntent(AssistantService.Action.STOP, ""))
-        } else {
-            startService(overlayIntent(AssistantService.Action.ANALYZE, boardView.position.toFen()))
+            return
         }
+        if (!com.cheese.assistant.capture.ScreenCapture.isRunning) {
+            startActivity(Intent(this, com.cheese.assistant.capture.CapturePermissionActivity::class.java))
+            Toast.makeText(this, "授权后请再点一次此按钮", Toast.LENGTH_LONG).show()
+            return
+        }
+        startService(overlayIntent(AssistantService.Action.START_AUTO, ""))
+        Toast.makeText(this, "已开启自动识别,请切到对局界面", Toast.LENGTH_LONG).show()
     }
 
     private fun overlayIntent(action: String, fen: String): Intent =

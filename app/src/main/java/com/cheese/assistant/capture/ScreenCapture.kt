@@ -52,6 +52,27 @@ object ScreenCapture {
             Handler(handlerThread!!.looper))
     }
 
+    /**
+     * 等待画面稳定：连续两帧 isSame 判定一致才返回（对局动画结束的信号）。
+     * 静止画面下 ImageReader 不再推送新帧，captureFresh 超时即视为稳定，
+     * 直接返回已持有的帧。全程只在内存中比对，不落盘。
+     */
+    fun captureStable(
+        quietMs: Long = 350,
+        timeoutMs: Long = 8000,
+        isSame: (Bitmap, Bitmap) -> Boolean,
+    ): Bitmap? {
+        var prev = captureFresh() ?: return null
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            Thread.sleep(quietMs)
+            val next = captureFresh(timeoutMs = 250) ?: return prev
+            if (isSame(prev, next)) return next
+            prev = next
+        }
+        return null
+    }
+
     /** 抓一帧并缓存到 lastFrame，返回是否成功 */
     fun captureToCache(): Boolean {
         val bmp = captureFresh() ?: return false

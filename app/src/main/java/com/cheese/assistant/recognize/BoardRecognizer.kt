@@ -3,6 +3,7 @@ package com.cheese.assistant.recognize
 import android.graphics.Bitmap
 import com.cheese.assistant.board.Piece
 import com.cheese.assistant.board.Position
+import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
@@ -110,6 +111,7 @@ object Features {
         val wpx = IntArray(win.width * win.height)
         win.getPixels(wpx, 0, win.width, 0, 0, win.width, win.height)
         removeRedOverlay(wpx, win.width, win.height)
+        removeWhiteOverlay(wpx, win.width, win.height)
 
         val gray = FloatArray(T * T)
         val rCh = FloatArray(T * T)
@@ -209,6 +211,41 @@ object Features {
         }
         val neutral = (med.toInt() and 0xFF) * 0x10101
         for (i in wpx.indices) if (dil[i]) wpx[i] = neutral
+    }
+
+    /**
+     * JJ 的白色脉动光圈（行棋方指示，常压在棋盘边缘空点上）会把空位的
+     * 窗口标准差抬过判空阈值（实测 34.7 > SD_MIN=32），被误判有子后所有
+     * 模板 d≈1 失败 → 永远 unknown。把亮白低饱和像素替换为窗口中值灰度，
+     * 空位光圈被抹平后 std 回落到判空区（PC 验证 34.7→26.5，90 点对照
+     * 其余 89 点结果不变）；若光圈罩在棋子上，剔除后同样恢复 NCC 匹配。
+     * 阈值 215/25 经 PC 端失败帧 + 全点对照验证（tools/.scratch_mp_fail2.png）。
+     */
+    private fun removeWhiteOverlay(wpx: IntArray, w: Int, h: Int) {
+        val ov = BooleanArray(wpx.size)
+        var any = false
+        for (i in wpx.indices) {
+            val c = wpx[i]
+            val r = c shr 16 and 0xFF
+            val g = c shr 8 and 0xFF
+            val b = c and 0xFF
+            val gray = 0.299f * r + 0.587f * g + 0.114f * b
+            if (gray > 215f && abs(r - g) < 25 && abs(g - b) < 25) { ov[i] = true; any = true }
+        }
+        if (!any) return
+        val gray = FloatArray(wpx.size)
+        for (i in wpx.indices) {
+            val c = wpx[i]
+            gray[i] = 0.299f * (c shr 16 and 0xFF) +
+                0.587f * (c shr 8 and 0xFF) + 0.114f * (c and 0xFF)
+        }
+        val keep = FloatArray(wpx.size)
+        var n = 0
+        for (i in gray.indices) if (!ov[i]) { keep[n++] = gray[i] }
+        if (n == 0) return
+        val med = median(keep.copyOf(n))
+        val neutral = (med.toInt() and 0xFF) * 0x10101
+        for (i in wpx.indices) if (ov[i]) wpx[i] = neutral
     }
 
     fun dist(a: F, b: F): Float {
