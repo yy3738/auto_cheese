@@ -111,7 +111,12 @@ object Features {
         val wpx = IntArray(win.width * win.height)
         win.getPixels(wpx, 0, win.width, 0, 0, win.width, win.height)
         removeRedOverlay(wpx, win.width, win.height)
-        removeWhiteOverlay(wpx, win.width, win.height)
+        // 白光圈占比:JJ 行棋指示光圈常压在空点上(掩码内白占比实测 13.7%,
+        // 正常棋子 <0.4%),剔除后窗口无棋子结构,红黑门失效会随机落到黑模板
+        // (曾致空点被判成黑王触发 credibility fail)。占比大直接判空;
+        // 光圈罩住真棋子时该帧丢一点,光圈走后下一帧补上
+        val whiteRatio = removeWhiteOverlay(wpx, win.width, win.height)
+        if (whiteRatio > 0.10f) return F(FloatArray(T * T), 0f, 0f)
 
         val gray = FloatArray(T * T)
         val rCh = FloatArray(T * T)
@@ -221,7 +226,7 @@ object Features {
      * 其余 89 点结果不变）；若光圈罩在棋子上，剔除后同样恢复 NCC 匹配。
      * 阈值 215/25 经 PC 端失败帧 + 全点对照验证（tools/.scratch_mp_fail2.png）。
      */
-    private fun removeWhiteOverlay(wpx: IntArray, w: Int, h: Int) {
+    private fun removeWhiteOverlay(wpx: IntArray, w: Int, h: Int): Float {
         val ov = BooleanArray(wpx.size)
         var any = false
         for (i in wpx.indices) {
@@ -230,9 +235,21 @@ object Features {
             val g = c shr 8 and 0xFF
             val b = c and 0xFF
             val gray = 0.299f * r + 0.587f * g + 0.114f * b
-            if (gray > 215f && abs(r - g) < 25 && abs(g - b) < 25) { ov[i] = true; any = true }
+            if (gray > 195f && abs(r - g) < 35 && abs(g - b) < 35) { ov[i] = true; any = true }
         }
-        if (!any) return
+        if (!any) return 0f
+        // 掩码(中心 72% 圆)内的白占比
+        val cc = (w - 1) / 2f
+        var maskCount = 0
+        var whiteCount = 0
+        for (y in 0 until h) for (x in 0 until w) {
+            val dx = x - cc; val dy = y - cc
+            if (dx * dx + dy * dy <= (0.72f * w / 2f) * (0.72f * w / 2f)) {
+                maskCount++
+                if (ov[y * w + x]) whiteCount++
+            }
+        }
+        val ratio = if (maskCount == 0) 0f else whiteCount.toFloat() / maskCount
         val gray = FloatArray(wpx.size)
         for (i in wpx.indices) {
             val c = wpx[i]
@@ -242,10 +259,11 @@ object Features {
         val keep = FloatArray(wpx.size)
         var n = 0
         for (i in gray.indices) if (!ov[i]) { keep[n++] = gray[i] }
-        if (n == 0) return
+        if (n == 0) return ratio
         val med = median(keep.copyOf(n))
         val neutral = (med.toInt() and 0xFF) * 0x10101
         for (i in wpx.indices) if (ov[i]) wpx[i] = neutral
+        return ratio
     }
 
     fun dist(a: F, b: F): Float {
