@@ -189,6 +189,7 @@ class AssistantService : Service() {
             var last: Position? = null
             var redToMove = true
             var rejects = 0
+            var consecutiveFails = 0
             withContext(Dispatchers.Main) {
                 showOverlay("自动识别：等待棋盘画面...")
                 overlayView?.setUserSide(recorder.userIsRed)
@@ -198,9 +199,13 @@ class AssistantService : Service() {
                     .onFailure { android.util.Log.e("AutoLoop", "waitForPosition threw", it) }
                     .getOrNull()
                 if (observed == null) {
-                    withContext(Dispatchers.Main) { showOverlay("等待稳定棋盘画面...") }
+                    // 连续 3 次失败才提示等待——单帧识别失败不该把候选从悬浮窗上刷掉
+                    if (++consecutiveFails >= 3) {
+                        withContext(Dispatchers.Main) { showOverlay("等待稳定棋盘画面...") }
+                    }
                     continue
                 }
+                consecutiveFails = 0
                 val pos = observed.pos
                 val prev = last
                 when {
@@ -216,26 +221,39 @@ class AssistantService : Service() {
                         postAnalysis(pos, redToMove)
                     }
                     pos.board.contentEquals(prev.board) -> delay(500)
-                    MoveCheck.isPlausibleStep(prev, pos) -> {
-                        recorder.record(prev, pos, moverIsRed = redToMove)
-                        last = pos
-                        redToMove = !redToMove
-                        postAnalysis(pos, redToMove)
-                    }
                     else -> {
-                        // 动画中间帧或识别抖动；连续 3 次视为新对局/大变化，重置局面
-                        rejects++
-                        android.util.Log.d("AutoLoop", "implausible step rejects=$rejects")
-                        if (rejects >= 3) {
-                            rejects = 0
-                            recorder.reset()
-                            last = pos
-                            recorder.start(pos, observed.userIsRed)
-                            // 跳变原因不明,假定轮用户(最常见:用户走完等建议)
-                            redToMove = recorder.userIsRed
-                            syncSideButton()
-                            postAnalysis(pos, redToMove)
-                        } else delay(400)
+                        when {
+                            // 光圈遮蔽帧(被罩子判空):忽略,锚点保持完整版
+                            MoveCheck.isVanishOnly(prev, pos) -> delay(500)
+                            // 遮蔽恢复帧(子重新可见):新局面才是完整版,修正锚点并重析;
+                            // 无真实走子,不记谱、不翻转轮走方
+                            MoveCheck.isAppearOnly(prev, pos) -> {
+                                android.util.Log.d("AutoLoop", "occlusion recovered")
+                                last = pos
+                                postAnalysis(pos, redToMove)
+                            }
+                            MoveCheck.isPlausibleStep(prev, pos) -> {
+                                recorder.record(prev, pos, moverIsRed = redToMove)
+                                last = pos
+                                redToMove = !redToMove
+                                postAnalysis(pos, redToMove)
+                            }
+                            else -> {
+                                // 动画中间帧或识别抖动；连续 3 次视为新对局/大变化，重置局面
+                                rejects++
+                                android.util.Log.d("AutoLoop", "implausible step rejects=$rejects")
+                                if (rejects >= 3) {
+                                    rejects = 0
+                                    recorder.reset()
+                                    last = pos
+                                    recorder.start(pos, observed.userIsRed)
+                                    // 跳变原因不明,假定轮用户(最常见:用户走完等建议)
+                                    redToMove = recorder.userIsRed
+                                    syncSideButton()
+                                    postAnalysis(pos, redToMove)
+                                } else delay(400)
+                            }
+                        }
                     }
                 }
             }
@@ -270,17 +288,22 @@ class AssistantService : Service() {
         return analyzeText(fen)
     }
 
-    // 上次分析的局面与轮走方——同局面同轮走方不重复分析(识别抖动往返时
-    // 曾致悬浮窗每隔几秒就重算一次,打扰用户)
-    private var lastAnalyzedFen: String? = null
-    private var lastAnalyzedUserTurn: Boolean? = null
+    // 最近已分析的局面(fen|轮到用户)集合——识别抖动在两个棋盘版本间往返时,
+    // 单槽去重会被交替冲穿(上次只记一个 FEN),保留最近 8 个彻底消除重复计算
+    private val analyzedKeys = ArrayDeque<String>()
+
+    private fun markAnalyzed(key: String) {
+        if (analyzedKeys.contains(key)) return
+        if (analyzedKeys.size >= 8) analyzedKeys.removeFirst()
+        analyzedKeys.addLast(key)
+    }
 
     private suspend fun postAnalysis(pos: Position, redToMove: Boolean) {
         val fen = Position(pos.board, redToMove).toFen()
         val userTurn = redToMove == recorder.userIsRed
-        if (fen == lastAnalyzedFen && userTurn == lastAnalyzedUserTurn) return
-        lastAnalyzedFen = fen
-        lastAnalyzedUserTurn = userTurn
+        val key = "$fen|$userTurn"
+        if (key in analyzedKeys) return
+        markAnalyzed(key)
         if (!userTurn) {
             // 实战辅助只给用户自己的走法;对手回合不占引擎
             withContext(Dispatchers.Main) { showOverlay("对手回合 · 等你落子") }

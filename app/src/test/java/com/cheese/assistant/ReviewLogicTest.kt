@@ -3,6 +3,7 @@ package com.cheese.assistant
 import com.cheese.assistant.board.Piece
 import com.cheese.assistant.board.Position
 import com.cheese.assistant.board.Zobrist
+import com.cheese.assistant.recognize.MoveCheck
 import com.cheese.assistant.review.GameRecorder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -68,5 +69,63 @@ class ReviewLogicTest {
         r.reset()
         assertTrue(r.isEmpty)
         assertNull(r.lastFen())
+    }
+}
+
+class OcclusionTest {
+
+    private fun board(vararg placed: Pair<Int, Piece>): Array<Piece?> {
+        val b = arrayOfNulls<Piece>(90)
+        for ((i, p) in placed) b[i] = p
+        return b
+    }
+
+    @Test
+    fun `仅消失一处是遮蔽帧`() {
+        val prev = Position(board(65 to Piece.R_KNIGHT), true)
+        val cur = Position(board(), true)
+        assertTrue(MoveCheck.isVanishOnly(prev, cur))
+        assertFalse(MoveCheck.isAppearOnly(prev, cur))
+    }
+
+    @Test
+    fun `仅出现一处是恢复帧`() {
+        val prev = Position(board(), true)
+        val cur = Position(board(65 to Piece.R_KNIGHT), true)
+        assertTrue(MoveCheck.isAppearOnly(prev, cur))
+        assertFalse(MoveCheck.isVanishOnly(prev, cur))
+    }
+
+    @Test
+    fun `消失加出现是真实走子不是遮蔽`() {
+        val prev = Position(board(65 to Piece.R_KNIGHT), true)
+        val cur = Position(board(74 to Piece.R_KNIGHT), true)
+        assertFalse(MoveCheck.isVanishOnly(prev, cur))
+        assertFalse(MoveCheck.isAppearOnly(prev, cur))
+        assertTrue(MoveCheck.isPlausibleStep(prev, cur))
+    }
+
+    @Test
+    fun `吃子(变更型)不是遮蔽`() {
+        val prev = Position(board(65 to Piece.R_KNIGHT, 74 to Piece.B_PAWN), true)
+        val cur = Position(board(74 to Piece.R_KNIGHT), true)
+        assertFalse(MoveCheck.isVanishOnly(prev, cur))
+        assertFalse(MoveCheck.isAppearOnly(prev, cur))
+        assertTrue(MoveCheck.isPlausibleStep(prev, cur))
+    }
+
+    @Test
+    fun `三处消失超过遮蔽上限`() {
+        val prev = Position(board(
+            65 to Piece.R_KNIGHT, 66 to Piece.R_ROOK, 67 to Piece.R_CANNON), true)
+        val cur = Position(board(), true)
+        assertFalse(MoveCheck.isVanishOnly(prev, cur))
+    }
+
+    @Test
+    fun `两处同时消失仍算遮蔽`() {
+        val prev = Position(board(65 to Piece.R_KNIGHT, 20 to Piece.B_PAWN), true)
+        val cur = Position(board(), true)
+        assertTrue(MoveCheck.isVanishOnly(prev, cur))
     }
 }

@@ -199,4 +199,35 @@ object MoveCheck {
         if (captured != null && captured.side == mover.side) return false
         return true
     }
+
+    /**
+     * 光圈遮蔽判定：JJ 的行棋/落子光圈罩在棋子上时，"白占比判空"会把被罩
+     * 棋子误判为空——该子随光圈脉动在有无之间翻转（实测红马 (7,2) 每个脉动
+     * 周期 31↔32 子交替）。抖动是双向的：
+     * - isVanishOnly：仅消失（≤2 处，无任何出现/变更）——被遮蔽帧，忽略；
+     * - isAppearOnly：仅出现（≤2 处）——遮蔽恢复帧，新局面才是完整版，
+     *   以新局面为准（否则锚点卡死在残缺版上，引擎按错误物力给怪招）。
+     * 真实走子/吃子必然同时有"消失+出现/变更"两处差异，不会被误吞。
+     */
+    fun isVanishOnly(prev: Position, cur: Position): Boolean {
+        var n = 0
+        for (i in 0 until 90) {
+            val a = prev.board[i]
+            val b = cur.board[i]
+            if (a == b) continue
+            if (a == null || b != null || ++n > 2) return false
+        }
+        return n > 0
+    }
+
+    fun isAppearOnly(prev: Position, cur: Position): Boolean {
+        var n = 0
+        for (i in 0 until 90) {
+            val a = prev.board[i]
+            val b = cur.board[i]
+            if (a == b) continue
+            if (a != null || b == null || ++n > 2) return false
+        }
+        return n > 0
+    }
 }
