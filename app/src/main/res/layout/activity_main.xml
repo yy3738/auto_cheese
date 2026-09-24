@@ -3,35 +3,74 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:padding="16dp">
 
+    <!-- 标题:产品名 + 一句话定位 -->
+    <TextView
+        android:id="@+id/titleView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="棋 室"
+        android:textSize="26sp"
+        android:fontFamily="serif"
+        android:textColor="@color/wood_light"
+        android:letterSpacing="0.3" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="实战辅助 · 落子有据"
+        android:textSize="11sp"
+        android:textColor="@color/text_secondary"
+        android:letterSpacing="0.15" />
+
+    <!-- 摆盘工具条 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:orientation="horizontal"
+        android:layout_marginTop="12dp"
+        android:gravity="center_vertical">
 
         <Spinner
             android:id="@+id/piecePicker"
             android:layout_width="0dp"
             android:layout_weight="1"
-            android:layout_height="wrap_content" />
+            android:layout_height="40dp"
+            android:background="@drawable/bg_chiptool" />
 
         <Button
             android:id="@+id/btnReset"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            style="@style/ChessBtn"
+            android:backgroundTint="@color/bg_card"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="36dp"
+            android:layout_marginStart="6dp"
+            android:textSize="12sp"
             android:text="@string/reset" />
 
         <Button
             android:id="@+id/btnClear"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            style="@style/ChessBtn"
+            android:backgroundTint="@color/bg_card"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="36dp"
+            android:layout_marginStart="6dp"
+            android:textSize="12sp"
             android:text="@string/clear" />
 
         <Button
             android:id="@+id/btnFlipSide"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            style="@style/ChessBtn"
+            android:backgroundTint="@color/bg_card"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="36dp"
+            android:layout_marginStart="6dp"
+            android:textSize="12sp"
             android:text="换先" />
     </LinearLayout>
 
@@ -40,58 +79,99 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_marginTop="8dp" />
+        android:layout_marginTop="12dp"
+        android:background="@drawable/bg_card" />
 
     <EditText
         android:id="@+id/fenView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:textSize="12sp"
+        android:layout_marginTop="10dp"
+        android:padding="6dp"
+        android:background="@drawable/bg_chiptool"
+        android:textSize="11sp"
+        android:textColor="@color/text_secondary"
         android:hint="FEN"
         android:inputType="none"
         android:focusable="false" />
 
-    <Button
-        android:id="@+id/btnAnalyze"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/analyze" />
-
+    <!-- 主操作:朱砂 -->
     <Button
         android:id="@+id/btnOverlay"
+        style="@style/ChessBtn"
+        android:backgroundTint="@color/cinnabar"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="12dp"
+        android:text="开始实战辅助" />
+
+    <!-- 次操作:两列 -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="@string/toggle_overlay" />
+        android:orientation="horizontal"
+        android:layout_marginTop="8dp">
 
-    <Button
-        android:id="@+id/btnCapture"
+        <Button
+            android:id="@+id/btnReview"
+            style="@style/ChessBtn"
+            android:backgroundTint="@color/jade"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="44dp"
+            android:text="对局复盘" />
+
+        <Button
+            android:id="@+id/btnAnalyze"
+            style="@style/ChessBtn"
+            android:backgroundTint="@color/bg_card"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="44dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/analyze" />
+    </LinearLayout>
+
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="@string/calibrate" />
+        android:orientation="horizontal"
+        android:layout_marginTop="6dp">
 
-    <Button
-        android:id="@+id/btnRecognize"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="@string/recognize" />
+        <Button
+            android:id="@+id/btnCapture"
+            style="@style/ChessBtn"
+            android:backgroundTint="@color/bg_panel"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="38dp"
+            android:textSize="12sp"
+            android:textColor="@color/text_secondary"
+            android:text="@string/calibrate" />
 
-    <Button
-        android:id="@+id/btnReview"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="对局复盘" />
+        <Button
+            android:id="@+id/btnRecognize"
+            style="@style/ChessBtn"
+            android:backgroundTint="@color/bg_panel"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="38dp"
+            android:layout_marginStart="8dp"
+            android:textSize="12sp"
+            android:textColor="@color/text_secondary"
+            android:text="@string/recognize" />
+    </LinearLayout>
 
+    <!-- 结果卡片 -->
     <TextView
         android:id="@+id/resultView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:minHeight="100dp"
+        android:layout_marginTop="10dp"
+        android:minHeight="88dp"
+        android:padding="10dp"
+        android:background="@drawable/bg_card"
         android:textSize="14sp"
-        android:fontFamily="monospace" />
+        android:fontFamily="monospace"
+        android:textColor="@color/text_primary" />
 </LinearLayout>

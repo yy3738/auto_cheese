@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 棋室主题:墨色底 + 木质面 + 朱砂强调。全站共用,改这里即可整体换肤 -->
+    <color name="bg_deep">#FF141210</color>          <!-- 主底:近黑褐 -->
+    <color name="bg_panel">#FF1E1B18</color>         <!-- 面板 -->
+    <color name="bg_card">#FF26221E</color>          <!-- 卡片 -->
+    <color name="wood_light">#FFE8C88F</color>       <!-- 棋子木色(浅) -->
+    <color name="wood_mid">#FFD4A85C</color>         <!-- 木质主色 -->
+    <color name="wood_dim">#FF8A6F4A</color>         <!-- 木质暗色 -->
+    <color name="cinnabar">#FFE05A47</color>         <!-- 朱砂(主操作) -->
+    <color name="jade">#FF7FA88C</color>             <!-- 墨玉青(成功/对局) -->
+    <color name="text_primary">#FFF0E9DD</color>     <!-- 主文字(暖白) -->
+    <color name="text_secondary">#FFB5AA98</color>   <!-- 次要文字 -->
+    <color name="line_dark">#FF3A342C</color>        <!-- 分隔线 -->
+    <color name="overlay_bg">#F012100E</color>       <!-- 悬浮窗底 -->
+    <color name="overlay_stroke">#FF4A4238</color>
+</resources>

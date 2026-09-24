@@ -2,6 +2,7 @@ package com.cheese.assistant.review
 
 import android.app.Activity
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
@@ -18,35 +19,38 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
- * 对局记录列表：每局一行（编号/时间/步数/结果/坏棋数），点行展开复盘明细。
- * 个人自用，程序化布局。
+ * 对局记录列表:棋室主题(墨底/木色标题/朱砂坏棋标),点行展开复盘明细。
  */
 class ReviewActivity : Activity() {
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
-    private val container = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(12), dp(4), dp(12), dp(12))
-    }
+    private lateinit var container: LinearLayout
     private var games: List<GameEntity> = emptyList()
     private val expandedIds = HashSet<Long>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), dp(16))
+        }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xFF141210.toInt())
             addView(TextView(this@ReviewActivity).apply {
-                text = "← 对局复盘"
-                textSize = 18f
-                setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(4), dp(16), dp(4), dp(4))
+                text = "复 盘"
+                textSize = 26f
+                typeface = Typeface.SERIF
+                setTextColor(0xFFE8C88F.toInt())
+                letterSpacing = 0.3f
+                setPadding(dp(2), dp(18), dp(2), dp(2))
                 setOnClickListener { finish() }
             })
             addView(TextView(this@ReviewActivity).apply {
-                text = "对局中点悬浮窗「结」按钮封存并自动复盘。点行展开明细。"
+                text = "← 返回   ·   点行展开明细"
                 textSize = 12f
-                setTextColor(0xFF666666.toInt())
-                setPadding(dp(4), 0, dp(4), dp(8))
+                setTextColor(0xFFB5AA98.toInt())
+                setPadding(dp(2), 0, dp(2), dp(10))
             })
         }
         root.addView(ScrollView(this).apply { addView(container) })
@@ -70,7 +74,8 @@ class ReviewActivity : Activity() {
         if (games.isEmpty()) {
             container.addView(TextView(this).apply {
                 text = "还没有对局记录\n\n对局中点悬浮窗「结」按钮封存并复盘"
-                setPadding(dp(8), dp(24), dp(8), dp(8))
+                setTextColor(0xFF8A8074.toInt())
+                setPadding(dp(8), dp(32), dp(8), dp(8))
             })
             return
         }
@@ -87,14 +92,11 @@ class ReviewActivity : Activity() {
         val blunders = g.blunderCount + g.blunderCountMajor
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(0xFFF4F2EE.toInt())
-                cornerRadius = dp(8).toFloat()
-            }
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = card()
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            lp.topMargin = dp(8)
+            lp.topMargin = dp(10)
             layoutParams = lp
             setOnClickListener {
                 if (!expandedIds.remove(g.id)) expandedIds.add(g.id)
@@ -104,17 +106,33 @@ class ReviewActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 addView(TextView(this@ReviewActivity).apply {
-                    text = "#${g.id}  ${formatTime(g.endedAt)}  ${moves}步"
-                    textSize = 14f
+                    text = "第 ${g.id} 局"
+                    textSize = 16f
+                    typeface = Typeface.SERIF
+                    setTextColor(0xFFE8C88F.toInt())
                 }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 addView(TextView(this@ReviewActivity).apply {
                     text = when {
                         g.reviewStatus != GameEntity.STATUS_DONE -> "复盘中"
-                        blunders > 0 -> "失误$blunders"
-                        else -> "无坏棋"
+                        blunders > 0 -> "⚠ $blunders"
+                        else -> "✓"
                     }
                     textSize = 13f
+                    setTextColor(
+                        when {
+                            g.reviewStatus != GameEntity.STATUS_DONE -> 0xFFB5AA98.toInt()
+                            blunders >= 3 -> 0xFFE05A47.toInt()
+                            blunders > 0 -> 0xFFD4A85C.toInt()
+                            else -> 0xFF7FA88C.toInt()
+                        }
+                    )
                 })
+            })
+            addView(TextView(this@ReviewActivity).apply {
+                text = "${formatTime(g.endedAt)}   ${moves}步   ${g.finalResult}"
+                textSize = 12f
+                setTextColor(0xFFB5AA98.toInt())
+                setPadding(0, dp(4), 0, 0)
             })
         }
         return row
@@ -124,7 +142,8 @@ class ReviewActivity : Activity() {
         text = buildDetailText(g)
         textSize = 13f
         typeface = Typeface.MONOSPACE
-        setPadding(dp(14), dp(6), dp(10), dp(6))
+        setTextColor(0xFFF0E9DD.toInt())
+        setPadding(dp(18), dp(10), dp(14), dp(10))
     }
 
     private fun buildDetailText(g: GameEntity): String {
@@ -134,16 +153,22 @@ class ReviewActivity : Activity() {
             val o = arr.getJSONObject(i)
             val delta = o.optInt("deltaCp", 0)
             val mark = when {
-                delta >= GameReviewer.BLUNDER_CP -> "  ←大漏着"
-                delta >= GameReviewer.MISTAKE_CP -> "  ←失误"
+                delta >= GameReviewer.BLUNDER_CP -> " ◆大漏着"
+                delta >= GameReviewer.MISTAKE_CP -> " ◇失误"
                 else -> ""
             }
             sb.append("你走 ").append(o.getString("playedCn"))
-                .append("  最佳 ").append(o.getString("bestCn"))
-            if (delta > 0) sb.append("  -").append(String.format("%.1f", delta / 100.0)).append("分")
+                .append("   最佳 ").append(o.getString("bestCn"))
+            if (delta > 0) sb.append("   -").append(String.format("%.1f", delta / 100.0)).append("分")
             sb.append(mark).append('\n')
         }
         return sb.toString()
+    }
+
+    private fun card(): GradientDrawable = GradientDrawable().apply {
+        setColor(0xFF26221E.toInt())
+        cornerRadius = dp(12).toFloat()
+        setStroke(dp(1), 0xFF3A342C.toInt())
     }
 
     private fun formatTime(ts: Long): String =

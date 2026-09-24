@@ -29,12 +29,13 @@ class BoardView @JvmOverloads constructor(
 
     var onPositionChanged: (() -> Unit)? = null
 
-    private val linePaint = Paint().apply { color = Color.DKGRAY; strokeWidth = 3f }
+    // 棋室主题:暖木线框,红子朱砂、黑子暖白(深底上黑字不可读)
+    private val linePaint = Paint().apply { color = 0xFF4A4238.toInt(); strokeWidth = 3f }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER; textSize = 42f; isFakeBoldText = true
     }
     private val selPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(90, 255, 140, 0); style = Paint.Style.FILL
+        color = 0x50E05A47; style = Paint.Style.FILL
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -68,7 +69,7 @@ class BoardView @JvmOverloads constructor(
         for (idx in 0 until 90) {
             val p = position.board[idx] ?: continue
             val row = idx / 9; val col = idx % 9
-            textPaint.color = if (p.isRed) Color.RED else Color.BLACK
+            textPaint.color = if (p.isRed) 0xFFE0604C.toInt() else 0xFFF0E9DD.toInt()
             canvas.drawText(p.cnName, cx(col), cy(row) + 14f, textPaint)
         }
     }
