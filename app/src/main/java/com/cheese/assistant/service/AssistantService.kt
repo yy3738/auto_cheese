@@ -208,6 +208,10 @@ class AssistantService : Service() {
                         last = pos
                         recorder.start(pos, observed.userIsRed)
                         android.util.Log.d("AutoLoop", "recorder start userIsRed=${observed.userIsRed}")
+                        // 轮走方:初始局面红先;中途开启(局面已变)时 AI 多半已走,
+                        // 假定轮到用户——走一步后按交替自动校正
+                        redToMove = if (pos.board.contentEquals(Position.START.board))
+                            true else recorder.userIsRed
                         syncSideButton()
                         postAnalysis(pos, redToMove)
                     }
@@ -227,6 +231,8 @@ class AssistantService : Service() {
                             recorder.reset()
                             last = pos
                             recorder.start(pos, observed.userIsRed)
+                            // 跳变原因不明,假定轮用户(最常见:用户走完等建议)
+                            redToMove = recorder.userIsRed
                             syncSideButton()
                             postAnalysis(pos, redToMove)
                         } else delay(400)
@@ -264,7 +270,22 @@ class AssistantService : Service() {
         return analyzeText(fen)
     }
 
+    // 上次分析的局面与轮走方——同局面同轮走方不重复分析(识别抖动往返时
+    // 曾致悬浮窗每隔几秒就重算一次,打扰用户)
+    private var lastAnalyzedFen: String? = null
+    private var lastAnalyzedUserTurn: Boolean? = null
+
     private suspend fun postAnalysis(pos: Position, redToMove: Boolean) {
+        val fen = Position(pos.board, redToMove).toFen()
+        val userTurn = redToMove == recorder.userIsRed
+        if (fen == lastAnalyzedFen && userTurn == lastAnalyzedUserTurn) return
+        lastAnalyzedFen = fen
+        lastAnalyzedUserTurn = userTurn
+        if (!userTurn) {
+            // 实战辅助只给用户自己的走法;对手回合不占引擎
+            withContext(Dispatchers.Main) { showOverlay("对手回合 · 等你落子") }
+            return
+        }
         val side = if (redToMove) "红方" else "黑方"
         withContext(Dispatchers.Main) { showOverlay("${side}回合 分析中...") }
         val text = analyzeWithKnowledge(Position(pos.board, redToMove).toFen())
