@@ -52,7 +52,7 @@ class BoardWatcher(
      * 非棋盘画面（大厅/弹窗）可能凑齐棋子数但没有双王，必须挡住，
      * 否则缺王 FEN 喂给 Pikafish 会触发断言 abort 整个进程。
      */
-    fun waitForPosition(timeoutMs: Long = STABLE_TIMEOUT_MS): Position? {
+    fun waitForPosition(timeoutMs: Long = STABLE_TIMEOUT_MS): Observed? {
         val bmp = ScreenCapture.captureStable(QUIET_MS, timeoutMs, ::sameRegion)
             ?: return null.also {
                 android.util.Log.e("BoardWatcher", "waitForPosition: captureStable null")
@@ -81,7 +81,29 @@ class BoardWatcher(
             return null
         }
         android.util.Log.d("BoardWatcher", "position OK pieces=$pieces")
-        return pos
+        return Observed(pos, bottomSideIsRed(result.position))
+    }
+
+    /** 识别成功的一帧：归一化局面 + 用户执方（屏幕最下一排的王色 = 用户） */
+    class Observed(val pos: Position, val userIsRed: Boolean)
+
+    /**
+     * 识别矩阵 row9（屏幕最下一排）的王色 = 用户执方（约定"下面的肯定是我"）。
+     * 找不到王（异常局面）默认红。
+     */
+    private fun bottomSideIsRed(raw: Position): Boolean {
+        // 正常情况王在 row9；网格吸附偶发漂移一行时王在 row8——按"靠屏幕下方的王"取执方
+        for (row in 9 downTo 8) {
+            for (c in 0..8) {
+                when (raw.board[row * 9 + c]) {
+                    Piece.R_KING -> return true
+                    Piece.B_KING -> return false
+                    else -> Unit
+                }
+            }
+        }
+        android.util.Log.e("BoardWatcher", "bottomSideIsRed: no king in bottom rows, fallback red")
+        return true
     }
 
     /** 识别失败帧落盘（app 内部存储），adb pull 出来给 PC 端 diag 对比 */

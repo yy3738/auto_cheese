@@ -46,6 +46,26 @@ data class Position(
     }
 
     companion object {
+        /** FEN → Position（解析失败返回 null） */
+        fun fromFen(fen: String): Position? {
+            val parts = fen.split(" ")
+            if (parts.isEmpty()) return null
+            val board = arrayOfNulls<Piece>(90)
+            var row = 0; var col = 0
+            for (c in parts[0]) when (c) {
+                '/' -> { row++; col = 0 }
+                in '1'..'9' -> col += c.digitToInt()
+                else -> {
+                    if (row > 9 || col > 8) return null
+                    val p = Piece.fromFen(c) ?: return null
+                    board[row * 9 + col] = p
+                    col++
+                }
+            }
+            if (row != 9 || col != 9) return null
+            return Position(board, parts.getOrNull(1) != "b")
+        }
+
         val START = Position(Array(90) { null }, true).apply {
             val back = listOf(
                 Piece.B_ROOK, Piece.B_KNIGHT, Piece.B_BISHOP, Piece.B_ADVISOR, Piece.B_KING,

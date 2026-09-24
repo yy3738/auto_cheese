@@ -9,8 +9,8 @@ package com.cheese.assistant.engine
  */
 data class Candidate(
     val rank: Int,          // multipv 序号，1 = 最佳
-    val scoreCp: Int?,      // 厘兵评分，正数 = 红优；mate 时为 null
-    val mateIn: Int?,       // N 步内必杀，非杀局面为 null
+    val scoreCp: Int?,      // 厘兵评分，正数 = 轮走方优（引擎原生视角，非"红优"）；mate 时为 null
+    val mateIn: Int?,       // N 步内必杀（正 = 轮走方杀），非杀局面为 null
     val depth: Int,
     val pv: List<String>,   // 主变着法序列，ICCS 格式
 )

@@ -69,6 +69,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnOverlay).setOnClickListener { toggleOverlay() }
         findViewById<Button>(R.id.btnCapture).setOnClickListener { testCapture() }
         findViewById<Button>(R.id.btnRecognize).setOnClickListener { testRecognize() }
+        findViewById<Button>(R.id.btnReview).setOnClickListener {
+            startActivity(android.content.Intent(this, com.cheese.assistant.review.ReviewActivity::class.java))
+        }
     }
 
     /**

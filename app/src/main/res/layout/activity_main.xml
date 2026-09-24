@@ -79,6 +79,13 @@
         android:layout_marginTop="4dp"
         android:text="@string/recognize" />
 
+    <Button
+        android:id="@+id/btnReview"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="对局复盘" />
+
     <TextView
         android:id="@+id/resultView"
         android:layout_width="match_parent"

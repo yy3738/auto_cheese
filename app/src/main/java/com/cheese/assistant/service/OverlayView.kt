@@ -10,7 +10,9 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * 悬浮窗信息条：半透明黑底圆角卡片，标题栏（拖动区+关闭）+ 内容文本。
+ * 悬浮窗信息条：半透明黑底圆角卡片，标题栏（拖动区+结束+关闭）+ 内容文本。
+ * 「结」= 封存当前对局并触发复盘；「红/黑」= 手动覆盖本局执方（默认按
+ * "屏幕下方 = 用户"自动判定）。
  */
 @SuppressLint("ViewConstructor")
 class OverlayView(context: Context) : LinearLayout(context) {
@@ -20,6 +22,24 @@ class OverlayView(context: Context) : LinearLayout(context) {
         setTextColor(0xFFCCCCCC.toInt())
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(10), dp(4), dp(10), dp(4))
+    }
+
+    /** 封存复盘按钮（对局进行中点它：封存棋谱 → 自动复盘） */
+    private val sealButton = TextView(context).apply {
+        text = "结"
+        setTextColor(0xFFFFD54F.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        gravity = Gravity.CENTER
+        setPadding(dp(10), dp(4), dp(10), dp(4))
+    }
+
+    /** 执方切换按钮：显示当前执方，点一下翻转（手动覆盖） */
+    private val sideButton = TextView(context).apply {
+        text = "红"
+        setTextColor(0xFFEF9A9A.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        gravity = Gravity.CENTER
         setPadding(dp(10), dp(4), dp(10), dp(4))
     }
 
@@ -54,6 +74,8 @@ class OverlayView(context: Context) : LinearLayout(context) {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(titleView, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            addView(sideButton)
+            addView(sealButton)
             addView(closeButton)
         }
         addView(handleBar)
@@ -64,8 +86,27 @@ class OverlayView(context: Context) : LinearLayout(context) {
         contentView.text = text
     }
 
+    /** 执方按钮显示同步（用户点击切换后调用方回填） */
+    fun setUserSide(isRed: Boolean) {
+        sideButton.text = if (isRed) "红" else "黑"
+        sideButton.setTextColor(if (isRed) 0xFFEF9A9A.toInt() else 0xFF90CAF9.toInt())
+    }
+
     fun setOnCloseListener(listener: () -> Unit) {
         closeButton.setOnClickListener { listener() }
+    }
+
+    fun setOnSealListener(listener: () -> Unit) {
+        sealButton.setOnClickListener { listener() }
+    }
+
+    fun setOnSideToggleListener(listener: (Boolean) -> Unit) {
+        var isRed = true
+        sideButton.setOnClickListener {
+            isRed = !isRed
+            setUserSide(isRed)
+            listener(isRed)
+        }
     }
 
     private fun dp(v: Int): Int =

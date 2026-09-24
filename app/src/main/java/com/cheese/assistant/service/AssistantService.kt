@@ -17,12 +17,15 @@ import androidx.core.app.NotificationCompat
 import com.cheese.assistant.R
 import com.cheese.assistant.board.MoveFormatter
 import com.cheese.assistant.board.Position
+import com.cheese.assistant.board.Zobrist
 import com.cheese.assistant.capture.ScreenCapture
+import com.cheese.assistant.db.AppDb
 import com.cheese.assistant.engine.SearchController
 import com.cheese.assistant.recognize.BoardGrid
 import com.cheese.assistant.recognize.BoardWatcher
 import com.cheese.assistant.recognize.MoveCheck
 import com.cheese.assistant.recognize.TemplateStore
+import com.cheese.assistant.review.saveToKnowledge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -46,6 +49,8 @@ class AssistantService : Service() {
 
         private const val PREFS = "assistant_state"
         private const val PREF_AUTO_ON = "auto_on"
+        /** 知识库命中门槛：库内深度低于此值照常搜索（3000ms 复盘通常 ≥14） */
+        private const val KB_MIN_DEPTH = 12
 
         var isRunning = false
             private set
@@ -55,6 +60,8 @@ class AssistantService : Service() {
     private var overlayView: OverlayView? = null
     private var controller: SearchController? = null
     private var autoJob: Job? = null
+    private var reviewJob: Job? = null
+    private val recorder = com.cheese.assistant.review.GameRecorder()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
@@ -96,6 +103,7 @@ class AssistantService : Service() {
                     .putBoolean(PREF_AUTO_ON, true).apply()
                 startAutoLoop()
             }
+            Action.SEAL -> sealAndReview()
         }
         return START_STICKY
     }
@@ -145,10 +153,16 @@ class AssistantService : Service() {
 
     /**
      * 自动识别循环：抓帧等画面稳定 → 识别 → 与上一局面比对（恰好一步或
-     * 连续 3 次异常后重置）→ 引擎分析 → 信息条更新。空闲时只做低频哈希
-     * 比对，几乎不耗电。
+     * 连续 3 次异常后重置）→ 记棋谱 → 查知识库（命中秒回）→ 引擎分析 →
+     * 信息条更新。
      */
     private fun startAutoLoop() {
+        if (reviewJob?.isActive == true) {
+            serviceScope.launch {
+                withContext(Dispatchers.Main) { showOverlay("复盘中,请稍候...") }
+            }
+            return
+        }
         if (autoJob?.isActive == true) return
         if (!ScreenCapture.isRunning) {
             serviceScope.launch {
@@ -175,23 +189,31 @@ class AssistantService : Service() {
             var last: Position? = null
             var redToMove = true
             var rejects = 0
-            withContext(Dispatchers.Main) { showOverlay("自动识别：等待棋盘画面...") }
+            withContext(Dispatchers.Main) {
+                showOverlay("自动识别：等待棋盘画面...")
+                overlayView?.setUserSide(recorder.userIsRed)
+            }
             while (isActive) {
-                val pos = runCatching { watcher.waitForPosition() }
+                val observed = runCatching { watcher.waitForPosition() }
                     .onFailure { android.util.Log.e("AutoLoop", "waitForPosition threw", it) }
                     .getOrNull()
-                if (pos == null) {
+                if (observed == null) {
                     withContext(Dispatchers.Main) { showOverlay("等待稳定棋盘画面...") }
                     continue
                 }
+                val pos = observed.pos
                 val prev = last
                 when {
                     prev == null -> {
                         last = pos
+                        recorder.start(pos, observed.userIsRed)
+                        android.util.Log.d("AutoLoop", "recorder start userIsRed=${observed.userIsRed}")
+                        syncSideButton()
                         postAnalysis(pos, redToMove)
                     }
                     pos.board.contentEquals(prev.board) -> delay(500)
                     MoveCheck.isPlausibleStep(prev, pos) -> {
+                        recorder.record(prev, pos, moverIsRed = redToMove)
                         last = pos
                         redToMove = !redToMove
                         postAnalysis(pos, redToMove)
@@ -202,7 +224,10 @@ class AssistantService : Service() {
                         android.util.Log.d("AutoLoop", "implausible step rejects=$rejects")
                         if (rejects >= 3) {
                             rejects = 0
+                            recorder.reset()
                             last = pos
+                            recorder.start(pos, observed.userIsRed)
+                            syncSideButton()
                             postAnalysis(pos, redToMove)
                         } else delay(400)
                     }
@@ -211,11 +236,90 @@ class AssistantService : Service() {
         }
     }
 
+    /** 识别到执方变化后同步悬浮窗按钮显示 */
+    private suspend fun syncSideButton() {
+        val isRed = recorder.userIsRed
+        withContext(Dispatchers.Main) { overlayView?.setUserSide(isRed) }
+    }
+
+    /**
+     * 单局面分析：用户行棋局面优先查知识库（命中且深度达标秒回，ADR-0003），
+     * 未命中照常引擎搜索。
+     */
+    private suspend fun analyzeWithKnowledge(fen: String): String {
+        val ctl = ensureController() ?: return "引擎初始化失败"
+        val pos = Position.fromFen(fen)
+        if (pos != null && recorder.isUserToMove()) {
+            val hash = Zobrist.of(pos.board, pos.redToMove)
+            val hit = runCatching { AppDb.get(this@AssistantService).positionDao().get(hash) }
+                .onFailure { android.util.Log.e("AutoLoop", "kb query failed", it) }
+                .getOrNull()
+            if (hit != null && hit.depth >= KB_MIN_DEPTH) {
+                android.util.Log.d("AutoLoop", "kb hit depth=${hit.depth}")
+                val score = hit.mateIn?.let { m -> "杀 $m" }
+                    ?: String.format("%+.1f", hit.bestScoreCp / 100.0)
+                return "库 ${score}  ${MoveFormatter.toChinese(hit.fen, hit.bestMove)}"
+            }
+        }
+        return analyzeText(fen)
+    }
+
     private suspend fun postAnalysis(pos: Position, redToMove: Boolean) {
         val side = if (redToMove) "红方" else "黑方"
         withContext(Dispatchers.Main) { showOverlay("${side}回合 分析中...") }
-        val text = analyzeText(Position(pos.board, redToMove).toFen())
+        val text = analyzeWithKnowledge(Position(pos.board, redToMove).toFen())
         withContext(Dispatchers.Main) { showOverlay("${side}回合\n$text") }
+    }
+
+    /**
+     * 封存当前对局并触发复盘（CONTEXT.md"对局边界=手动封存"）。
+     * 停掉自动循环（引擎独占给复盘），棋谱入库，逐局面 3000ms 深搜，
+     * 结论写 games.review_json 与知识库。复盘完成后 recorder 重置。
+     */
+    private fun sealAndReview() {
+        if (reviewJob?.isActive == true) return
+        if (recorder.isEmpty) {
+            serviceScope.launch {
+                withContext(Dispatchers.Main) { showOverlay("尚无对局记录") }
+            }
+            return
+        }
+        autoJob?.cancel()
+        autoJob = null
+        val game = com.cheese.assistant.db.GameEntity(
+            startedAt = recorder.startedAt,
+            endedAt = System.currentTimeMillis(),
+            userIsRed = recorder.userIsRed,
+            moveListJson = recorder.toJson(),
+        )
+        val moves = recorder.movesSnapshot()
+        val userIsRed = recorder.userIsRed
+        reviewJob = serviceScope.launch(Dispatchers.IO) {
+            val db = AppDb.get(this@AssistantService)
+            val gameId = runCatching { db.gameDao().insert(game) }
+                .onFailure { android.util.Log.e("SealReview", "insert game failed", it) }
+                .getOrNull()
+            val ctl = ensureController()
+            if (ctl == null || gameId == null) {
+                withContext(Dispatchers.Main) { showOverlay("复盘失败:引擎不可用") }
+                return@launch
+            }
+            val reviewer = com.cheese.assistant.review.GameReviewer(ctl)
+            withContext(Dispatchers.Main) { showOverlay("复盘中:${moves.size}步...") }
+            val reviews = runCatching { reviewer.review(moves, userIsRed) }
+                .onFailure { android.util.Log.e("SealReview", "review failed", it) }
+                .getOrDefault(emptyList())
+            runCatching { saveToKnowledge(db, reviews) }
+            val mistakes = reviews.count { it.blunderLevel == 1 }
+            val majors = reviews.count { it.blunderLevel == 2 }
+            db.gameDao().finishReview(
+                gameId, com.cheese.assistant.db.GameEntity.STATUS_DONE,
+                com.cheese.assistant.review.reviewsToJson(reviews), mistakes, majors)
+            recorder.reset()
+            withContext(Dispatchers.Main) {
+                showOverlay("复盘完成\n失误$mistakes 大漏着$majors\n(主界面「对局复盘」查看)")
+            }
+        }
     }
 
     @SuppressLint("InflateParams", "ClickableViewAccessibility")
@@ -226,7 +330,15 @@ class AssistantService : Service() {
         }
         val view = OverlayView(this)
         view.setText(initialText)
+        view.setUserSide(recorder.userIsRed)
         view.setOnCloseListener { stopSelf() }
+        view.setOnSealListener {
+            startService(Intent(this, AssistantService::class.java)
+                .setAction(Action.SEAL))
+        }
+        view.setOnSideToggleListener { isRed ->
+            recorder.setUserSide(isRed)
+        }
 
         // 拖动：按住标题栏移动整个窗口
         var downX = 0f
@@ -293,6 +405,7 @@ class AssistantService : Service() {
         const val ANALYZE = "com.cheese.assistant.ANALYZE"
         const val START_AUTO = "com.cheese.assistant.START_AUTO"
         const val STOP = "com.cheese.assistant.STOP"
+        const val SEAL = "com.cheese.assistant.SEAL"
     }
 
     object Extra {
