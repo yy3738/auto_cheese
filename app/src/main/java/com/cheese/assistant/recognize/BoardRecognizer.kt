@@ -16,6 +16,18 @@ object BoardRecognizer {
     /** 窗口灰度标准差低于该值判空 */
     const val SD_MIN = 32f
 
+    /** 光圈下判空阈值:空位+光圈剔除后 std≈35(光圈边缘残余),棋子+光圈
+     *  剔除后 std≈60+(棋子结构残留)。用 45 区分:光圈下 std<45 判空 */
+    const val GLOW_SD_MIN = 45f
+
+    /** 触发抬高判空阈值的白光圈占比门槛 */
+    const val GLOW_RATIO_MIN = 0.10f
+
+    /** 光圈活跃点的匹配门槛:剔除光圈后的残缺结构易误配同色棋子
+     *  (实测新走子+光圈被配成仕 d≈0.79 前的旧版 0.7x)。unknown 是
+     *  安全失败(整帧作废重试),误匹配是危险失败(错误局面被当真) */
+    const val GLOW_UNKNOWN_DIST = 0.5f
+
     /** redness 超过该值视为红方查询 */
     const val REDNESS_GATE = 40f
 
@@ -46,7 +58,10 @@ object BoardRecognizer {
         for (i in 0 until 90) {
             val row = i / 9; val col = i % 9
             val feat = Features.ofBmp(bmp, grid.x(row, col), grid.y(row, col), radius)
-            if (feat.std < SD_MIN) continue
+            // 光圈下用抬高阈值判空:空位+光圈 std≈35 被挡住,棋子+光圈 std≈60 照常识别
+            val glow = feat.whiteRatio > GLOW_RATIO_MIN
+            val sdGate = if (glow) GLOW_SD_MIN else SD_MIN
+            if (feat.std < sdGate) continue
             if (tmpl.isEmpty()) { unknown[i] = true; continue }
             var bestPiece = "EMPTY"; var bestDist = Float.MAX_VALUE
             for ((name, tf) in tmpl) {
@@ -57,7 +72,9 @@ object BoardRecognizer {
                 val d = Features.dist(feat, tf)
                 if (d < bestDist) { bestDist = d; bestPiece = name }
             }
-            if (bestDist > UNKNOWN_DIST) {
+            // 光圈活跃点收紧 unknown 门槛:残缺结构宁可判不明(整帧重试)
+            // 也不要误配成同色棋子污染锚点(锚点错→恢复帧被当 implausible→风暴)
+            if (bestDist > (if (glow) GLOW_UNKNOWN_DIST else UNKNOWN_DIST)) {
                 unknown[i] = true
                 debug.append("($row,$col) d=$bestDist  ")
                 if (col == 2) debug.append('\n')
@@ -93,7 +110,9 @@ object Features {
 
     private val CC = (T - 1) / 2f
 
-    class F(val q: FloatArray, val std: Float, val redness: Float)
+    class F(val q: FloatArray, val std: Float, val redness: Float,
+            /** 掩码内白光圈像素占比——光圈下判空阈值需抬高（见 GLOW_SD_MIN） */
+            val whiteRatio: Float = 0f)
 
     fun of(bitmap: Bitmap): F = ofBmp(
         bitmap, bitmap.width / 2f, bitmap.height / 2f,
@@ -111,12 +130,13 @@ object Features {
         val wpx = IntArray(win.width * win.height)
         win.getPixels(wpx, 0, win.width, 0, 0, win.width, win.height)
         removeRedOverlay(wpx, win.width, win.height)
-        // 白光圈占比:JJ 行棋指示光圈常压在空点上(掩码内白占比实测 13.7%,
-        // 正常棋子 <0.4%),剔除后窗口无棋子结构,红黑门失效会随机落到黑模板
-        // (曾致空点被判成黑王触发 credibility fail)。占比大直接判空;
-        // 光圈罩住真棋子时该帧丢一点,光圈走后下一帧补上
+        // 白光圈剔除:JJ 行棋/落子光圈(亮白低饱和)压在格点上。剔除后:
+        // - 空位+光圈:窗口趋于平坦,std ≈35(光圈边缘残余),需抬高判空阈值
+        //   挡住(否则被误判有子,红黑门失效随机配到黑王 → credibility fail)
+        // - 棋子+光圈:棋子结构(字/形体)残留,std ≈60+,正常识别即可
+        //   (曾用"占比>10% 直接判空"导致光圈罩住的棋子随脉动在有无间
+        //   翻转,用户的走子被吸收,建议永远停在走子前)
         val whiteRatio = removeWhiteOverlay(wpx, win.width, win.height)
-        if (whiteRatio > 0.10f) return F(FloatArray(T * T), 0f, 0f)
 
         val gray = FloatArray(T * T)
         val rCh = FloatArray(T * T)
@@ -145,13 +165,13 @@ object Features {
                 gCh[idx] = sgn / n
             }
         }
-        return analyze(gray, rCh, gCh)
+        return analyze(gray, rCh, gCh, whiteRatio)
     }
 
     private val MR2 = (0.72f * T / 2f) * (0.72f * T / 2f)
 
     /** 灰度图 → 归一化特征 + std + redness（输入 rCh/gCh 供 redness 用） */
-    private fun analyze(gray: FloatArray, rCh: FloatArray, gCh: FloatArray): F {
+    private fun analyze(gray: FloatArray, rCh: FloatArray, gCh: FloatArray, whiteRatio: Float): F {
         var sum = 0f
         for (v in gray) sum += v
         val mean = sum / gray.size
@@ -168,7 +188,7 @@ object Features {
             if (MASK[i] && gray[i] < med - 30f) { rdSum += rCh[i] - gCh[i]; n++ }
         }
         val redness = if (n == 0) 0f else rdSum / n
-        return F(q, std, redness)
+        return F(q, std, redness, whiteRatio)
     }
 
     private fun median(a: FloatArray): Float {

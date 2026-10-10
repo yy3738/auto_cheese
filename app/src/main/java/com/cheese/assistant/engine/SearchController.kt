@@ -8,6 +8,7 @@ data class SearchResult(
     val candidates: List<Candidate>,
     val bestMove: String,
     val depth: Int,
+    val failed: Boolean = false,
 ) {
     val best: Candidate? get() = candidates.firstOrNull()
 }
@@ -69,13 +70,13 @@ class SearchController(
         // Pikafish 在缺王局面会触发断言 abort,必须先把关
         val boardPart = fen.substringBefore(' ')
         if (boardPart.count { it == 'K' } != 1 || boardPart.count { it == 'k' } != 1) {
-            return@withContext SearchResult(emptyList(), "", 0)
+            return@withContext SearchResult(emptyList(), "", 0, failed = true)
         }
         // set_position 失败（仕象越界等非法局面）后引擎内部是空局面，
         // 继续同样触发缺王断言，必须直接放弃本次搜索
         if (!e.nativeSetPosition(fen, emptyArray())) {
             android.util.Log.e("SearchCtl", "set_position failed fen=[$fen]")
-            return@withContext SearchResult(emptyList(), "", 0)
+            return@withContext SearchResult(emptyList(), "", 0, failed = true)
         }
         val byRank = HashMap<Int, Candidate>()
         var bestMove = ""

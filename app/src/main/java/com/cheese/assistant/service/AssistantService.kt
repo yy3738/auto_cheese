@@ -141,7 +141,9 @@ class AssistantService : Service() {
         val ctl = ensureController() ?: return "引擎初始化失败"
         return try {
             val result = ctl.search(fen)
-            result.candidates.joinToString("\n") { c ->
+            // 局面非法(幻影子/缺王)时引擎拒绝搜索:明确提示,不留旧推荐误导
+            if (result.failed) "局面异常,重新定位中..."
+            else result.candidates.joinToString("\n") { c ->
                 val score = c.mateIn?.let { m -> if (m > 0) "杀 $m" else "被杀 $m" }
                     ?: String.format("%+.1f", c.scoreCp!! / 100.0)
                 "$score  ${MoveFormatter.toChinese(fen, c.pv.first())}"
@@ -190,6 +192,14 @@ class AssistantService : Service() {
             var redToMove = true
             var rejects = 0
             var consecutiveFails = 0
+            // 单帧 retag 缓存: JJ 选中/光圈标记的单帧误配若立即修正锚点,
+            // 会把真实棋子替换成假子(实测选中卒→"士"),随后的真实走子帧
+            // mover 对不上,宽松步/双步分解全部失效。连续两帧同 retag 才采纳
+            var pendingRetag: Position? = null
+            // 重置后的确认期:reset 时锚点可能含识别残缺帧,连续两次识别
+            // 一致才出推荐(实测光圈假子直接进入分析 FEN 触发 set_position 失败)
+            var pendingConfirm: Position? = null
+            var pendingConfirmRed = true
             withContext(Dispatchers.Main) {
                 showOverlay("自动识别：等待棋盘画面...")
                 overlayView?.setUserSide(recorder.userIsRed)
@@ -201,13 +211,39 @@ class AssistantService : Service() {
                 if (observed == null) {
                     // 连续 3 次失败才提示等待——单帧识别失败不该把候选从悬浮窗上刷掉
                     if (++consecutiveFails >= 3) {
+                        overlayInWait = true
                         withContext(Dispatchers.Main) { showOverlay("等待稳定棋盘画面...") }
                     }
                     continue
                 }
                 consecutiveFails = 0
+                if (overlayInWait) {
+                    // 识别恢复:先把候选文本请回来,否则去重逻辑会让候选永远停在"等待"
+                    overlayInWait = false
+                    lastOverlayText?.let { t ->
+                        withContext(Dispatchers.Main) { showOverlay(t) }
+                    }
+                }
                 val pos = observed.pos
                 val prev = last
+                // 确认期:重置后等连续两次一致。一致则出推荐;不一致当作
+                // 新锚点重新确认(此前 500ms 的 delay 期间画面在稳定)
+                val awaiting = pendingConfirm
+                if (awaiting != null) {
+                    if (awaiting.board.contentEquals(pos.board)) {
+                        pendingConfirm = null
+                        postAnalysis(pos, pendingConfirmRed)
+                    } else {
+                        // 画面还在变:重置锚点到最新帧,继续确认
+                        pendingConfirm = pos
+                        recorder.reset()
+                        recorder.start(pos, observed.userIsRed)
+                        redToMove = if (pos.board.contentEquals(Position.START.board))
+                            true else recorder.userIsRed
+                        pendingConfirmRed = redToMove
+                    }
+                    continue
+                }
                 when {
                     prev == null -> {
                         last = pos
@@ -224,7 +260,10 @@ class AssistantService : Service() {
                     else -> {
                         when {
                             // 光圈遮蔽帧(被罩子判空):忽略,锚点保持完整版
-                            MoveCheck.isVanishOnly(prev, pos) -> delay(500)
+                            MoveCheck.isVanishOnly(prev, pos) -> {
+                                android.util.Log.d("AutoLoop", "vanish-only: ${diffText(prev, pos)}")
+                                delay(500)
+                            }
                             // 遮蔽恢复帧(子重新可见):新局面才是完整版,修正锚点并重析;
                             // 无真实走子,不记谱、不翻转轮走方
                             MoveCheck.isAppearOnly(prev, pos) -> {
@@ -232,32 +271,118 @@ class AssistantService : Service() {
                                 last = pos
                                 postAnalysis(pos, redToMove)
                             }
+                            // 锚点帧误配(如光圈下的炮被配成仕)恢复:原地换子,
+                            // 真实走子不可能单点变更。但标记类误配也是单点变更,
+                            // 需连续两帧稳定呈现才修正锚点(单帧先暂存观察)
+                            MoveCheck.isSingleRetag(prev, pos) -> {
+                                val pend = pendingRetag
+                                pendingRetag = null
+                                if (pend != null && pend.board.contentEquals(pos.board)) {
+                                    android.util.Log.d("AutoLoop", "retag confirmed: ${diffText(prev, pos)}")
+                                    last = pos
+                                    postAnalysis(pos, redToMove)
+                                } else {
+                                    android.util.Log.d("AutoLoop", "retag pending: ${diffText(prev, pos)}")
+                                    pendingRetag = pos
+                                    delay(500)
+                                }
+                            }
                             MoveCheck.isPlausibleStep(prev, pos) -> {
-                                recorder.record(prev, pos, moverIsRed = redToMove)
+                                android.util.Log.d("AutoLoop", "step: ${diffText(prev, pos)}")
+                                // 归因以实际移动的棋子颜色为准，不盲信轮走方：
+                                // 幽灵步错耗回合槽后，真实走子会被记到对方名下，
+                                // 整条 FEN 毒化。发现不一致时按实际颜色记账并重同步
+                                val actualRed = MoveCheck.stepMoverIsRed(prev, pos) ?: redToMove
+                                if (actualRed != redToMove) {
+                                    android.util.Log.w("AutoLoop",
+                                        "turn desync: expected ${if (redToMove) "red" else "black"} " +
+                                            "to move, but mover is ${if (actualRed) "red" else "black"}; resyncing")
+                                    redToMove = actualRed
+                                    syncSideButton()
+                                }
+                                recorder.record(prev, pos, moverIsRed = actualRed)
                                 last = pos
-                                redToMove = !redToMove
+                                redToMove = !actualRed
+                                postAnalysis(pos, redToMove)
+                            }
+                            // 出发点被行棋光圈罩住误配成假子(卒走后出发点亮圈配成士),
+                            // 与落点出现同子凑成 2 处差异,严格步判不了——按走子记账
+                            MoveCheck.isStepGhostOrigin(prev, pos) -> {
+                                android.util.Log.d("AutoLoop", "step(ghost): ${diffText(prev, pos)}")
+                                val actualRed = MoveCheck.ghostMoverIsRed(prev, pos) ?: redToMove
+                                if (actualRed != redToMove) {
+                                    android.util.Log.w("AutoLoop",
+                                        "turn desync(ghost): resyncing to ${if (actualRed) "red" else "black"}")
+                                    redToMove = actualRed
+                                    syncSideButton()
+                                }
+                                recorder.record(prev, pos, moverIsRed = actualRed)
+                                last = pos
+                                redToMove = !actualRed
                                 postAnalysis(pos, redToMove)
                             }
                             else -> {
-                                // 动画中间帧或识别抖动；连续 3 次视为新对局/大变化，重置局面
-                                rejects++
-                                android.util.Log.d("AutoLoop", "implausible step rejects=$rejects")
-                                if (rejects >= 3) {
-                                    rejects = 0
-                                    recorder.reset()
+                                // AI 秒回:我方一步+AI一步叠加在同一识别窗口,
+                                // 分解为先后两步记谱;分解失败才走 implausible
+                                val mid = MoveCheck.tryTwoSteps(prev, pos, redToMove)
+                                if (mid != null) {
+                                    android.util.Log.d("AutoLoop",
+                                        "two steps: ${diffText(prev, mid)} | ${diffText(mid, pos)}")
+                                    // 第一步归因同样按棋子实际颜色校正(双向枚举后
+                                    // firstIsRed 只是猜测)，第二步随之交替
+                                    val firstRed = MoveCheck.stepMoverIsRed(prev, mid)
+                                        ?: MoveCheck.ghostMoverIsRed(prev, mid)
+                                        ?: redToMove
+                                    val secondRed = MoveCheck.stepMoverIsRed(mid, pos) ?: !firstRed
+                                    if (firstRed != redToMove) {
+                                        android.util.Log.w("AutoLoop",
+                                            "turn desync(two-steps): resyncing to ${if (firstRed) "red" else "black"} first")
+                                        redToMove = firstRed
+                                        syncSideButton()
+                                    }
+                                    recorder.record(prev, mid, moverIsRed = firstRed)
+                                    recorder.record(mid, pos, moverIsRed = secondRed)
                                     last = pos
-                                    recorder.start(pos, observed.userIsRed)
-                                    // 跳变原因不明,假定轮用户(最常见:用户走完等建议)
-                                    redToMove = recorder.userIsRed
-                                    syncSideButton()
-                                    postAnalysis(pos, redToMove)
-                                } else delay(400)
+                                    // 两步后仍轮 firstRed 方
+                                    postAnalysis(pos, firstRed)
+                                } else {
+                                    // 动画中间帧或识别抖动；连续 3 次视为新对局/大变化，重置局面
+                                    rejects++
+                                    android.util.Log.d("AutoLoop",
+                                        "implausible step rejects=$rejects diff=${diffText(prev, pos)}")
+                                    if (rejects >= 3) {
+                                        rejects = 0
+                                        recorder.reset()
+                                        last = pos
+                                        recorder.start(pos, observed.userIsRed)
+                                        // 跳变原因不明,假定轮用户(最常见:用户走完等建议)
+                                        redToMove = recorder.userIsRed
+                                        syncSideButton()
+                                        // 重置后锚点可能仍是识别残缺帧:先不分析,
+                                        // 连续两次识别一致才出推荐,防幽灵子污染 FEN
+                                        pendingConfirm = pos
+                                        pendingConfirmRed = redToMove
+                                        withContext(Dispatchers.Main) { showOverlay("重新定位局面...") }
+                                    } else delay(400)
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    /** 识别矩阵 row0 = 屏幕最上排;日志用 (屏幕行,列) 直读 */
+    private fun diffText(a: Position, b: Position): String {
+        val parts = ArrayList<String>()
+        for (i in 0 until 90) {
+            if (a.board[i] == b.board[i]) continue
+            val name = { p: com.cheese.assistant.board.Piece? -> p?.cnName ?: "空" }
+            parts.add("(${i / 9},${i % 9})${name(a.board[i])}→${name(b.board[i])}")
+            if (parts.size >= 6) break
+        }
+        return parts.joinToString(" ")
     }
 
     /** 识别到执方变化后同步悬浮窗按钮显示 */
@@ -292,6 +417,11 @@ class AssistantService : Service() {
     // 单槽去重会被交替冲穿(上次只记一个 FEN),保留最近 8 个彻底消除重复计算
     private val analyzedKeys = ArrayDeque<String>()
 
+    // 悬浮窗最近一次有效文本:识别抖动刷掉候选("等待稳定棋盘画面...")后,
+    // 识别恢复时用它原样恢复——analyzedKeys 去重会挡住 postAnalysis 重算
+    private var lastOverlayText: String? = null
+    private var overlayInWait = false
+
     private fun markAnalyzed(key: String) {
         if (analyzedKeys.contains(key)) return
         if (analyzedKeys.size >= 8) analyzedKeys.removeFirst()
@@ -302,17 +432,23 @@ class AssistantService : Service() {
         val fen = Position(pos.board, redToMove).toFen()
         val userTurn = redToMove == recorder.userIsRed
         val key = "$fen|$userTurn"
+        // 局面指纹:棋子数+HH:mm,便于核对推荐基于的盘面与实际是否一致
+        val pieces = pos.board.count { it != null }
+        val stamp = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+            .format(java.util.Date())
         if (key in analyzedKeys) return
         markAnalyzed(key)
         if (!userTurn) {
             // 实战辅助只给用户自己的走法;对手回合不占引擎
-            withContext(Dispatchers.Main) { showOverlay("对手回合 · 等你落子") }
+            lastOverlayText = "对手回合 · 等你落子 (${pieces}子 $stamp)"
+            withContext(Dispatchers.Main) { showOverlay(lastOverlayText!!) }
             return
         }
         val side = if (redToMove) "红方" else "黑方"
         withContext(Dispatchers.Main) { showOverlay("${side}回合 分析中...") }
         val text = analyzeWithKnowledge(Position(pos.board, redToMove).toFen())
-        withContext(Dispatchers.Main) { showOverlay("${side}回合\n$text") }
+        lastOverlayText = "${side}回合 (${pieces}子 $stamp)\n$text"
+        withContext(Dispatchers.Main) { showOverlay(lastOverlayText!!) }
     }
 
     /**

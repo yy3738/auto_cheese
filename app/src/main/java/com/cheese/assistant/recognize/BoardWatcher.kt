@@ -78,6 +78,8 @@ class BoardWatcher(
         if (redKings != 1 || blackKings != 1 || pieces < MIN_PIECES) {
             android.util.Log.e("BoardWatcher",
                 "waitForPosition: credibility fail redK=$redKings blackK=$blackKings pieces=$pieces")
+            // 矩阵行=屏幕行(normalize 前),直接对照截图定位多出的假王
+            android.util.Log.d("BoardWatcher", result.matrixText.replace("\n", " | "))
             return null
         }
         android.util.Log.d("BoardWatcher", "position OK pieces=$pieces")
@@ -182,23 +184,34 @@ class BoardWatcher(
  */
 object MoveCheck {
 
-    fun isPlausibleStep(prev: Position, cur: Position): Boolean {
-        var from = -1
-        var to = -1
-        for (i in 0 until 90) {
-            if (prev.board[i] == cur.board[i]) continue
-            if (from < 0) from = i
-            else if (to < 0) to = i
-            else return false
+    /**
+     * 返回该步移动者的颜色(isPlausibleStep 的信息版)。null = 不是合法单步。
+     * 双向尝试:吃子时落点索引可能小于出发点(AI 居上吃下方子),
+     * 固定"第一个差异=出发点"会因落点残留被吃子而误判。
+     */
+    fun stepMoverIsRed(prev: Position, cur: Position): Boolean? {
+        var i = -1
+        var j = -1
+        for (k in 0 until 90) {
+            if (prev.board[k] == cur.board[k]) continue
+            if (i < 0) i = k
+            else if (j < 0) j = k
+            else return null
         }
-        if (from < 0 || to < 0) return false
-        val mover = prev.board[from] ?: return false
-        if (cur.board[from] != null) return false
-        if (cur.board[to] != mover) return false
-        val captured = prev.board[to]
-        if (captured != null && captured.side == mover.side) return false
-        return true
+        if (i < 0 || j < 0) return null
+        for ((from, to) in listOf(i to j, j to i)) {
+            val mover = prev.board[from] ?: continue
+            if (cur.board[from] != null) continue
+            if (cur.board[to] != mover) continue
+            val captured = prev.board[to]
+            if (captured != null && captured.side == mover.side) continue
+            return mover.isRed
+        }
+        return null
     }
+
+    fun isPlausibleStep(prev: Position, cur: Position): Boolean =
+        stepMoverIsRed(prev, cur) != null
 
     /**
      * 光圈遮蔽判定：JJ 的行棋/落子光圈罩在棋子上时，"白占比判空"会把被罩
@@ -229,5 +242,92 @@ object MoveCheck {
             if (a != null || b == null || ++n > 2) return false
         }
         return n > 0
+    }
+
+    /**
+     * 单点原地变更(棋子A→棋子B,双方非空):锚点帧光圈残缺误配的恢复特征
+     * (实测新走的炮在锚点里被配成仕,光圈减弱后恢复成炮)。真实走子必然
+     * 同时空出出发点(2处差异),不可能原地换子。以 cur 为准修正锚点。
+     */
+    fun isSingleRetag(prev: Position, cur: Position): Boolean {
+        var n = 0
+        for (i in 0 until 90) {
+            val a = prev.board[i]
+            val b = cur.board[i]
+            if (a == b) continue
+            if (a == null || b == null || ++n > 1) return false
+        }
+        return n == 1
+    }
+
+    /**
+     * 宽松步判定:与 isPlausibleStep 相同,但容忍出发点的误配残留——
+     * 行棋光圈罩住刚挪空的出发点时,残缺结构会被误配成某个同色棋子
+     * (实测卒走后出发点亮红圈被配成"士",2 处差异无法解释为任何单步,
+     * 连吃 3 次 implausible 触发 reset 丢棋谱)。判定:恰好 2 处差异,
+     * prev[from] 完整出现在 cur[to](同子),目标点原为空或敌子;
+     * cur[from] 是什么(空=严格步,误配残留=光圈帧)不再苛求。
+     */
+    fun ghostMoverIsRed(prev: Position, cur: Position): Boolean? {
+        var i = -1
+        var j = -1
+        for (k in 0 until 90) {
+            if (prev.board[k] == cur.board[k]) continue
+            if (i < 0) i = k
+            else if (j < 0) j = k
+            else return null
+        }
+        if (i < 0 || j < 0) return null
+        // 两个差异点谁是出发点、谁是落点须双向尝试:
+        // 差异点索引顺序 ≠ 走子方向(落点索引可以小于出发点)
+        for ((from, to) in listOf(i to j, j to i)) {
+            val mover = prev.board[from] ?: continue
+            if (cur.board[to] != mover) continue
+            val target = prev.board[to]
+            if (target != null && target.side == mover.side) continue
+            return mover.isRed
+        }
+        return null
+    }
+
+    fun isStepGhostOrigin(prev: Position, cur: Position): Boolean =
+        ghostMoverIsRed(prev, cur) != null
+
+    /**
+     * 双步叠加分解：AI 秒回时"我方一步 + AI 一步"落在同一识别窗口，
+     * 4 处差异不是任何单步。枚举第一步(firstIsRed 方)的所有单步移动，
+     * 要求剩余差异恰好是对方的单步。返回中间局面；失败返回 null
+     * （调用方走 implausible/reset 路径）。
+     */
+    fun tryTwoSteps(prev: Position, cur: Position, firstIsRed: Boolean): Position? {
+        for (from in 0 until 90) {
+            val mover = prev.board[from] ?: continue
+            if (mover.isRed != firstIsRed) continue
+            for (to in 0 until 90) {
+                if (to == from) continue
+                val captured = prev.board[to]
+                if (captured != null && captured.isRed == firstIsRed) continue
+                val midBoard = prev.board.copyOf()
+                midBoard[from] = null
+                midBoard[to] = mover
+                val mid = Position(midBoard, !prev.redToMove)
+                if (!isPlausibleStep(mid, cur)) continue
+                // 第二步必须动对方棋子(isPlausibleStep 不校验颜色)。
+                // 吃子情形下被吃子位置也满足 mid≠cur 且 mid 有子,
+                // firstOrNull 会选到它而非移动者离开的点——须双向配对
+                // 找真正的出发点(特征:cur[from2] 已腾空)
+                val diffs = (0 until 90).filter { mid.board[it] != cur.board[it] }
+                var mover2Red: Boolean? = null
+                for ((from2, _) in listOf(diffs[0] to diffs[1], diffs[1] to diffs[0])) {
+                    val mover2 = mid.board[from2] ?: continue
+                    if (cur.board[from2] != null) continue
+                    mover2Red = mover2.isRed
+                    break
+                }
+                if (mover2Red == null || mover2Red == firstIsRed) continue
+                return mid
+            }
+        }
+        return null
     }
 }
