@@ -45,6 +45,9 @@ class BoardWatcher(
             .map { it.toInt().coerceAtLeast(0) }.toIntArray()
     }
 
+    // 最近一次可信局面:缺王帧(王被光圈遮蔽)时用于判定是否遮蔽抖动
+    private var lastGood: Observed? = null
+
     /**
      * 阻塞等待一个可信局面。返回 null 表示本次没有可信结果
      * （动画太久 / 识别有未定点 / 当前画面不是棋盘）。
@@ -80,10 +83,25 @@ class BoardWatcher(
                 "waitForPosition: credibility fail redK=$redKings blackK=$blackKings pieces=$pieces")
             // 矩阵行=屏幕行(normalize 前),直接对照截图定位多出的假王
             android.util.Log.d("BoardWatcher", result.matrixText.replace("\n", " | "))
+            // 王被光圈/将军特效遮蔽的帧(缺王)若相对上次可信局面只是
+            // "消失",属遮蔽抖动:复用上次结果
+            lastGood?.let { good ->
+                if (MoveCheck.isVanishOnly(good.pos, pos)) {
+                    android.util.Log.d("BoardWatcher", "king occluded, reuse last good")
+                    return good
+                }
+                // 棋局在走时与旧局面差异大,"纯消失"不成立——但王被特效
+                // 罩住判空时,场上恰好没有王而旧局面王格有王:把王放回去
+                // (王不可能离开棋盘)。修复失败才放弃
+                MoveCheck.restoreMissingKings(good.pos, pos)?.let { repaired ->
+                    android.util.Log.d("BoardWatcher", "king occluded, restored")
+                    return Observed(repaired, good.userIsRed)
+                }
+            }
             return null
         }
         android.util.Log.d("BoardWatcher", "position OK pieces=$pieces")
-        return Observed(pos, bottomSideIsRed(result.position))
+        return Observed(pos, bottomSideIsRed(result.position)).also { lastGood = it }
     }
 
     /** 识别成功的一帧：归一化局面 + 用户执方（屏幕最下一排的王色 = 用户） */
@@ -248,6 +266,7 @@ object MoveCheck {
      * 单点原地变更(棋子A→棋子B,双方非空):锚点帧光圈残缺误配的恢复特征
      * (实测新走的炮在锚点里被配成仕,光圈减弱后恢复成炮)。真实走子必然
      * 同时空出出发点(2处差异),不可能原地换子。以 cur 为准修正锚点。
+     * 价值跳变(车↔卒等)由 isValueJumpRetag 单独识别,调用方分流处理。
      */
     fun isSingleRetag(prev: Position, cur: Position): Boolean {
         var n = 0
@@ -259,6 +278,114 @@ object MoveCheck {
         }
         return n == 1
     }
+
+    /**
+     * 价值跳变的单点变更:同色的车马炮↔卒士象原地互换。真实误配恢复的
+     * 互换对是"作战子↔防御子"的近邻混淆(实测炮被配成仕,恢复帧改回),
+     * 而"车→卒"这种远距离跳变只会来自点击选中时棋子被"抬起"的残缺帧
+     * (实测采纳后毒FEN直接进引擎 set_position failed,悬浮窗卡死)。
+     * 调用方应忽略该帧保留旧锚点:棋子放下/走开后识别自动恢复,
+     * 真走子仍能被正常识别。
+     */
+    fun isValueJumpRetag(prev: Position, cur: Position): Boolean {
+        var n = 0
+        var from: Piece? = null
+        var to: Piece? = null
+        for (i in 0 until 90) {
+            val a = prev.board[i]
+            val b = cur.board[i]
+            if (a == b) continue
+            if (a == null || b == null || ++n > 1) return false
+            from = a
+            to = b
+        }
+        if (n != 1) return false
+        val a = from!!
+        val b = to!!
+        // 单向:只拦"大子→小子"(毒出现)。"小子→大子"是抬起结束后
+        // 的恢复帧,放行才能让毒锚点自愈(retag 两帧确认后采纳修正)
+        return a.isRed == b.isRed &&
+            MAJOR_PIECES.contains(a) && !MAJOR_PIECES.contains(b)
+    }
+
+    /**
+     * 规则不可能的兵卒位置:黑卒起始行 3 只能前进到行 9,行 0-2 出现黑卒
+     * 必是误配(实测点击选中棋子时 JJ 把棋子抬起,底行黑车被配成黑卒,
+     * 毒 FEN 进引擎 set_position failed);红兵起始行 6 只能前进到行 0,
+     * 行 7-9 出现红兵同理。调用方应整帧忽略:不锚定、不分析,锚点保持
+     * 选前好帧,选中期间的残缺帧全部透明。
+     */
+    fun hasImpossiblePawn(pos: Position): Boolean {
+        for (i in 0 until 90) {
+            when (pos.board[i]) {
+                Piece.B_PAWN -> if (i / 9 < 3) return true
+                Piece.R_PAWN -> if (i / 9 > 6) return true
+                else -> Unit
+            }
+        }
+        return false
+    }
+
+    /**
+     * 用锚点修复不可能兵卒位:选中棋子被 JJ"抬起"悬空在原格上方,轮廓
+     * 变化使其被误读成兵/卒(实测黑车抬起→黑卒出现在规则不可能的行),
+     * 每个稳定帧都被 hasImpossiblePawn 拦截,选中期间识别完全瘫痪。
+     * 修复:不可能兵卒格若锚点在同格有非兵卒棋子,用锚点棋子替换回来
+     * (棋子实际未动)。修复失败(无锚点/锚点同格不是棋子)返回 null。
+     */
+    fun repairImpossiblePawns(anchor: Position, pos: Position): Position? {
+        val board = pos.board.copyOf()
+        var changed = false
+        for (i in 0 until 90) {
+            val impossible = when (board[i]) {
+                Piece.B_PAWN -> i / 9 < 3
+                Piece.R_PAWN -> i / 9 > 6
+                else -> false
+            }
+            if (!impossible) continue
+            val fix = anchor.board[i]
+            if (fix == null || fix == Piece.B_PAWN || fix == Piece.R_PAWN) return null
+            board[i] = fix
+            changed = true
+        }
+        return if (changed) Position(board, pos.redToMove) else null
+    }
+
+    /**
+     * 用锚点修复缺失的王:将/帅被将军特效或行棋光圈持续罩住时判空或
+     * 被误读成同色其他子(实测帥+白光圈→红炮),每帧都被"双王俱在"校验
+     * 拒绝,识别完全瘫痪。修复:场上缺红王时看锚点红王格——为空或被
+     * 红子占据(=王被误读)都放回红王;被黑子占据说明王真被吃(对局已
+     * 结束),拒绝修复返回 null。
+     */
+    fun restoreMissingKings(anchor: Position, pos: Position): Position? {
+        val hasRedKing = pos.board.any { it == Piece.R_KING }
+        val hasBlackKing = pos.board.any { it == Piece.B_KING }
+        if (hasRedKing && hasBlackKing) return null
+        val board = pos.board.copyOf()
+        if (!hasRedKing) {
+            val i = anchor.board.indexOfFirst { it == Piece.R_KING }
+            if (i < 0) return null
+            val cur = board[i]
+            if (cur != null && !cur.isRed) return null
+            board[i] = Piece.R_KING
+        }
+        if (!hasBlackKing) {
+            val i = anchor.board.indexOfFirst { it == Piece.B_KING }
+            if (i < 0) return null
+            val cur = board[i]
+            if (cur != null && cur.isRed) return null
+            board[i] = Piece.B_KING
+        }
+        return Position(board, pos.redToMove)
+    }
+
+    /** 车马——与卒/士/象的轮廓差异巨大,原地互换必是"抬起"残缺帧。
+     *  炮除外:炮↔仕是实测存在的近邻误配恢复对,必须放行 */
+    private val MAJOR_PIECES = setOf(
+        Piece.R_ROOK, Piece.R_KNIGHT,
+        Piece.B_ROOK, Piece.B_KNIGHT,
+    )
 
     /**
      * 宽松步判定:与 isPlausibleStep 相同,但容忍出发点的误配残留——

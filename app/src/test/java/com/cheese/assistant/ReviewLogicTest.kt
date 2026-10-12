@@ -1,5 +1,6 @@
 package com.cheese.assistant
 
+import com.cheese.assistant.board.MoveFormatter
 import com.cheese.assistant.board.Piece
 import com.cheese.assistant.board.Position
 import com.cheese.assistant.board.Zobrist
@@ -173,6 +174,138 @@ class OcclusionTest {
     }
 
     @Test
+    fun `车换卒是价值跳变不是合法换子`() {
+        // 实测:点击棋子后JJ把棋子抬起,轮廓变化使车被识别成卒,
+        // 采纳后毒FEN进引擎 set_position failed
+        val prev = Position(board(83 to Piece.B_ROOK), true)
+        val cur = Position(board(83 to Piece.B_PAWN), true)
+        assertTrue(MoveCheck.isSingleRetag(prev, cur))
+        assertTrue(MoveCheck.isValueJumpRetag(prev, cur))
+    }
+
+    @Test
+    fun `异色单点换子不是价值跳变`() {
+        val prev = Position(board(83 to Piece.B_ROOK), true)
+        val cur = Position(board(83 to Piece.R_PAWN), true)
+        assertFalse(MoveCheck.isValueJumpRetag(prev, cur))
+    }
+
+    @Test
+    fun `同类子换标签不是价值跳变`() {
+        // 光圈误配恢复:炮↔仕 同为大子侧互换? 炮是大子,仕不是——
+        // 但实测这类"新走的炮被配成仕"需要被采纳修正锚点,
+        // 价值跳变只拦大子→小子的跨级互换
+        val prev = Position(board(65 to Piece.R_CANNON, 83 to Piece.B_PAWN), true)
+        val cur = Position(board(65 to Piece.R_ADVISOR, 83 to Piece.B_PAWN), true)
+        assertTrue(MoveCheck.isSingleRetag(prev, cur))
+        assertFalse(MoveCheck.isValueJumpRetag(prev, cur))
+    }
+
+    @Test
+    fun `小子换大子是恢复帧不是价值跳变`() {
+        // 抬起结束后的恢复帧(卒→车)必须放行,毒锚点才能自愈;
+        // 双向拦截会让毒永远洗不掉
+        val prev = Position(board(83 to Piece.B_PAWN), true)
+        val cur = Position(board(83 to Piece.B_ROOK), true)
+        assertTrue(MoveCheck.isSingleRetag(prev, cur))
+        assertFalse(MoveCheck.isValueJumpRetag(prev, cur))
+    }
+
+    @Test
+    fun `黑卒在行0至2是不可能的局面`() {
+        // 实测:点击选中抬起黑车,被误配成黑卒出现在底行(norm 行0)
+        val pos = Position(board(7 to Piece.B_PAWN), true)
+        assertTrue(MoveCheck.hasImpossiblePawn(pos))
+    }
+
+    @Test
+    fun `黑卒在行3是正常的局面`() {
+        val pos = Position(board(27 to Piece.B_PAWN), true)
+        assertFalse(MoveCheck.hasImpossiblePawn(pos))
+    }
+
+    @Test
+    fun `红兵在行7至9是不可能的局面`() {
+        val pos = Position(board(63 to Piece.R_PAWN), true)
+        assertTrue(MoveCheck.hasImpossiblePawn(pos))
+    }
+
+    @Test
+    fun `无不可能兵位返回假`() {
+        val pos = Position(board(65 to Piece.R_KNIGHT, 33 to Piece.B_PAWN), true)
+        assertFalse(MoveCheck.hasImpossiblePawn(pos))
+    }
+
+    @Test
+    fun `用锚点修复抬起棋子的误读兵卒`() {
+        // 锚点:黑车在 7(行0);抬起后同格被误读成黑卒(不可能位)
+        val anchor = Position(board(7 to Piece.B_ROOK, 65 to Piece.R_KNIGHT), true)
+        val bad = Position(board(7 to Piece.B_PAWN, 65 to Piece.R_KNIGHT), true)
+        val fixed = MoveCheck.repairImpossiblePawns(anchor, bad)
+        assertEquals(Piece.B_ROOK, fixed?.board?.get(7))
+    }
+
+    @Test
+    fun `锚点同格是兵卒无法修复`() {
+        // 锚点同格也是兵(合法的兵推进到此处),不可能是误读,拒绝修复
+        val anchor = Position(board(27 to Piece.B_PAWN), true)
+        val bad = Position(board(27 to Piece.B_PAWN), true)
+        // 该帧本身没有不可能位,构造一个:7格卒 + 锚点同格无子
+        val anchor2 = Position(board(), true)
+        val bad2 = Position(board(7 to Piece.B_PAWN), true)
+        assertNull(MoveCheck.repairImpossiblePawns(anchor2, bad2))
+        @Suppress("UNUSED_VARIABLE") val unused = anchor to bad
+    }
+
+    @Test
+    fun `修复结果与锚点相同时可判断未动`() {
+        val anchor = Position(board(7 to Piece.B_ROOK, 30 to Piece.B_PAWN), true)
+        val bad = Position(board(7 to Piece.B_PAWN, 30 to Piece.B_PAWN), true)
+        val fixed = MoveCheck.repairImpossiblePawns(anchor, bad)
+        assertTrue(fixed?.board?.contentEquals(anchor.board) == true)
+    }
+
+    @Test
+    fun `缺红王时用锚点王格修复`() {
+        // 锚点红王在 4;当前帧被将军特效罩住判空
+        val anchor = Position(board(4 to Piece.R_KING, 85 to Piece.B_KING, 30 to Piece.B_PAWN), true)
+        val bad = Position(board(85 to Piece.B_KING, 30 to Piece.B_PAWN), true)
+        val fixed = MoveCheck.restoreMissingKings(anchor, bad)
+        assertEquals(Piece.R_KING, fixed?.board?.get(4))
+    }
+
+    @Test
+    fun `缺红王但王格被同色子占据也修复`() {
+        // 实测:帅被白光圈罩住被误读成炮(同色其他子),也要放回王
+        val anchor = Position(board(4 to Piece.R_KING, 85 to Piece.B_KING), true)
+        val bad = Position(board(4 to Piece.R_CANNON, 85 to Piece.B_KING), true)
+        val fixed = MoveCheck.restoreMissingKings(anchor, bad)
+        assertEquals(Piece.R_KING, fixed?.board?.get(4))
+    }
+
+    @Test
+    fun `双王俱在无需修复`() {
+        val anchor = Position(board(4 to Piece.R_KING, 85 to Piece.B_KING), true)
+        val ok = Position(board(4 to Piece.R_KING, 85 to Piece.B_KING), true)
+        assertNull(MoveCheck.restoreMissingKings(anchor, ok))
+    }
+
+    @Test
+    fun `王格被敌子占据时拒绝修复`() {
+        // 当前帧王格出现敌方棋子 → 王真被吃了(对局结束),修复无意义
+        val anchor = Position(board(4 to Piece.R_KING, 85 to Piece.B_KING), true)
+        val bad = Position(board(4 to Piece.B_KNIGHT, 85 to Piece.B_KING), true)
+        assertNull(MoveCheck.restoreMissingKings(anchor, bad))
+    }
+
+    @Test
+    fun `锚点无王时拒绝修复`() {
+        val anchor = Position(board(85 to Piece.B_KING), true)
+        val bad = Position(board(85 to Piece.B_KING), true)
+        assertNull(MoveCheck.restoreMissingKings(anchor, bad))
+    }
+
+    @Test
     fun `出发点残留假子的走子是宽松步`() {
         // 实测:卒从 A 走到 B,出发点被行棋光圈罩住误配成士,
         // 2 处差异(卒→士 + 空→卒)不是严格步,需宽松判定接住
@@ -283,5 +416,38 @@ class OcclusionTest {
         val prev2 = Position(board(65 to Piece.R_KNIGHT, 20 to Piece.B_PAWN), true)
         val cur2 = Position(board(65 to Piece.R_ROOK, 20 to Piece.R_KNIGHT), true)
         assertEquals(true, MoveCheck.ghostMoverIsRed(prev2, cur2))
+    }
+}
+
+class MoveFormatterTest {
+
+    // 黑车在 rank6 col7(车8)，卒在 col0/2/4/8
+    private val blackRookFen =
+        "2bak1b2/9/2n1b1n2/p1p1p1prp/9/9/P1P1P3P/1C2C4/9/RNBAKABNR b"
+    private val startFen =
+        "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w"
+
+    @Test
+    fun `黑车直线进1步不显示目标纵线号`() {
+        // 旧bug: "进N"显示目标rank而非步数(如"卒3进5"实为进1步)
+        assertEquals("车8进1", MoveFormatter.toChinese(blackRookFen, "h6h5"))
+    }
+
+    @Test
+    fun `黑车同列后退显示退`() {
+        // 旧bug: 同列直线无条件写"进"
+        assertEquals("车8退1", MoveFormatter.toChinese(blackRookFen, "h6h7"))
+    }
+
+    @Test
+    fun `红马斜走进用汉字`() {
+        // 马八进七: b0 -> c2
+        assertEquals("马八进七", MoveFormatter.toChinese(startFen, "b0c2"))
+    }
+
+    @Test
+    fun `红炮横移显示平`() {
+        // 炮二平五: h2 -> e2
+        assertEquals("炮二平五", MoveFormatter.toChinese(startFen, "h2e2"))
     }
 }

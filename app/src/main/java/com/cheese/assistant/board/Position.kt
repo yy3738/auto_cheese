@@ -105,10 +105,10 @@ object MoveFormatter {
         fun fileLabel(file: Int): String =
             if (red) CN_NUM[8 - file] else "${file + 1}"
 
-        // 步进数：红方 rank 递减方向（向黑方）为进
-        fun stepLabel(sq: String): String {
-            val rank = rankOf(sq)
-            return if (red) CN_NUM[9 - rank - 1] else "$rank"
+        // 直线着法的步进数：进几格就是数字几（红方用汉字）
+        fun stepLabel(from: String, to: String): String {
+            val steps = kotlin.math.abs(rankOf(to) - rankOf(from))
+            return if (red) CN_NUM[steps - 1] else "$steps"
         }
 
         val name = piece.cnName
@@ -116,13 +116,17 @@ object MoveFormatter {
         val toFile = fileOf(to)
 
         return when {
-            fromFile == toFile -> "$name${fileLabel(fromFile)}进${stepLabel(to)}"
+            fromFile == toFile -> {
+                // 同列直线（车炮兵将）：进 = 向对方底线（红 rank 增，黑 rank 减）
+                val advancing = if (red) rankOf(to) > rankOf(from) else rankOf(to) < rankOf(from)
+                "$name${fileLabel(fromFile)}${if (advancing) "进" else "退"}${stepLabel(from, to)}"
+            }
             else -> {
                 // 平移或斜走（马象仕）：进/平 + 目标纵线
                 val isDiagonal = piece != Piece.R_PAWN && piece != Piece.B_PAWN &&
                         (rankOf(from) != rankOf(to))
                 val verb = if (isDiagonal) {
-                    val advancing = if (red) rankOf(to) < rankOf(from) else rankOf(to) > rankOf(from)
+                    val advancing = if (red) rankOf(to) > rankOf(from) else rankOf(to) < rankOf(from)
                     if (advancing) "进" else "退"
                 } else "平"
                 "$name${fileLabel(fromFile)}$verb${fileLabel(toFile)}"

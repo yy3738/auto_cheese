@@ -217,6 +217,31 @@ class AssistantService : Service() {
                     continue
                 }
                 consecutiveFails = 0
+                var pos = observed.pos
+                // 选中棋子被 JJ"抬起"悬空,轮廓变化使该子被误读成不可能
+                // 位置的兵/卒。先用锚点修复:修复结果与锚点相同 → 棋子
+                // 未动,当作无变化;修复失败 → 整帧丢弃;修复后仍是新局面
+                // → 继续走子流程
+                if (MoveCheck.hasImpossiblePawn(pos)) {
+                    val repaired = last?.let { MoveCheck.repairImpossiblePawns(it, pos) }
+                    if (repaired == null) {
+                        android.util.Log.d("AutoLoop", "impossible pawn, frame ignored")
+                        if (++consecutiveFails >= 3) {
+                            overlayInWait = true
+                            withContext(Dispatchers.Main) { showOverlay("等待稳定棋盘画面...") }
+                        }
+                        delay(600)
+                        continue
+                    }
+                    if (repaired.board.contentEquals(last!!.board)) {
+                        android.util.Log.d("AutoLoop", "impossible pawn repaired to anchor")
+                        delay(600)
+                        continue
+                    }
+                    android.util.Log.d("AutoLoop", "impossible pawn repaired, reprocess")
+                    pos = repaired
+                }
+                consecutiveFails = 0
                 if (overlayInWait) {
                     // 识别恢复:先把候选文本请回来,否则去重逻辑会让候选永远停在"等待"
                     overlayInWait = false
@@ -224,7 +249,6 @@ class AssistantService : Service() {
                         withContext(Dispatchers.Main) { showOverlay(t) }
                     }
                 }
-                val pos = observed.pos
                 val prev = last
                 // 确认期:重置后等连续两次一致。一致则出推荐;不一致当作
                 // 新锚点重新确认(此前 500ms 的 delay 期间画面在稳定)
@@ -232,10 +256,12 @@ class AssistantService : Service() {
                 if (awaiting != null) {
                     if (awaiting.board.contentEquals(pos.board)) {
                         pendingConfirm = null
+                        last = pos
                         postAnalysis(pos, pendingConfirmRed)
                     } else {
-                        // 画面还在变:重置锚点到最新帧,继续确认
+                        // 画面还在变:锚点跟随最新帧,继续确认
                         pendingConfirm = pos
+                        last = pos
                         recorder.reset()
                         recorder.start(pos, observed.userIsRed)
                         redToMove = if (pos.board.contentEquals(Position.START.board))
@@ -274,6 +300,13 @@ class AssistantService : Service() {
                             // 锚点帧误配(如光圈下的炮被配成仕)恢复:原地换子,
                             // 真实走子不可能单点变更。但标记类误配也是单点变更,
                             // 需连续两帧稳定呈现才修正锚点(单帧先暂存观察)
+                            // 价值跳变帧(点击棋子"抬起"使车被配成卒等)直接忽略:
+                            // 锚点保持旧版,等棋子放下/走开后识别自动恢复
+                            MoveCheck.isValueJumpRetag(prev, pos) -> {
+                                android.util.Log.d("AutoLoop",
+                                    "value-jump retag ignored: ${diffText(prev, pos)}")
+                                delay(500)
+                            }
                             MoveCheck.isSingleRetag(prev, pos) -> {
                                 val pend = pendingRetag
                                 pendingRetag = null
@@ -437,7 +470,6 @@ class AssistantService : Service() {
         val stamp = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
             .format(java.util.Date())
         if (key in analyzedKeys) return
-        markAnalyzed(key)
         if (!userTurn) {
             // 实战辅助只给用户自己的走法;对手回合不占引擎
             lastOverlayText = "对手回合 · 等你落子 (${pieces}子 $stamp)"
@@ -447,6 +479,13 @@ class AssistantService : Service() {
         val side = if (redToMove) "红方" else "黑方"
         withContext(Dispatchers.Main) { showOverlay("${side}回合 分析中...") }
         val text = analyzeWithKnowledge(Position(pos.board, redToMove).toFen())
+        if (text.contains("局面异常") || text.contains("搜索失败")) {
+            // 失败结果不缓存:去重 key 会挡住重试,悬浮窗从此卡死旧文本。
+            // 不记 analyzedKeys、不写 lastOverlayText,下一帧自动重新分析
+            withContext(Dispatchers.Main) { showOverlay("${side}回合 $text") }
+            return
+        }
+        markAnalyzed(key)
         lastOverlayText = "${side}回合 (${pieces}子 $stamp)\n$text"
         withContext(Dispatchers.Main) { showOverlay(lastOverlayText!!) }
     }
