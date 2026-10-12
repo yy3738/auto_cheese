@@ -12,4 +12,12 @@
     <color name="line_light">#FFCBD5E1</color>       <!-- 分隔线/边框 -->
     <color name="overlay_bg">#D9F8FAFD</color>       <!-- 悬浮窗底:白 85% -->
     <color name="overlay_stroke">#FFCBD5E1</color>
+
+    <!-- 主界面版式扩展 -->
+    <color name="bg_grad_top">#FFEDF2FA</color>      <!-- 页面顶部:淡蓝晕 -->
+    <color name="bg_grad_bottom">#FFFDFEFF</color>   <!-- 页面底部:近白 -->
+    <color name="tint_navy_soft">#FFF2F6FB</color>   <!-- 藏蓝 4% 淡染(FEN/结果底) -->
+    <color name="divider_soft">#66CBD5E1</color>     <!-- 分隔线 40% -->
+    <color name="navy_ghost">#80234B94</color>       <!-- 藏蓝描边 50%(幽灵卡) -->
+    <color name="board_frame">#59234B94</color>      <!-- 棋盘框:藏蓝 35% -->
 </resources>

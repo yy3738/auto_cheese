@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 结果卡:淡蓝染底 + 左侧藏蓝墨条 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="12dp" />
+            <solid android:color="@color/tint_navy_soft" />
+            <stroke android:width="1dp" android:color="@color/divider_soft" />
+        </shape>
+    </item>
+    <item
+        android:width="4dp"
+        android:gravity="start">
+        <shape android:shape="rectangle">
+            <corners android:radius="2dp" />
+            <solid android:color="@color/navy" />
+        </shape>
+    </item>
+</layer-list>
