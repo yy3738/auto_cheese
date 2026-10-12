@@ -33,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -551,18 +552,22 @@ class AssistantService : Service() {
     private fun onSealButton() {
         if (awaitingNextGame) {
             awaitingNextGame = false
-            // 清棋谱与悬浮窗状态机归位
-            recorder.reset()
-            analyzedKeys.clear()
-            lastOverlayText = null
-            autoJob?.cancel()
-            autoJob = null
-            if (ScreenCapture.isRunning) {
-                startAutoLoop()
-            } else {
-                serviceScope.launch(Dispatchers.Main) {
-                    showOverlay("新对局已就绪\n请回主界面完成截屏授权后开始")
+            // 清棋谱与悬浮窗状态机归位。cancelAndJoin 等进行中的分析退出,
+            // 否则残留搜索与重启动的 autoLoop 抢同一个引擎
+            serviceScope.launch(Dispatchers.IO) {
+                autoJob?.cancelAndJoin()
+                recorder.reset()
+                analyzedKeys.clear()
+                lastOverlayText = null
+                autoJob = null
+                if (ScreenCapture.isRunning) {
+                    startAutoLoop()
+                } else {
+                    withContext(Dispatchers.Main) {
+                        showOverlay("新对局已就绪\n请回主界面完成截屏授权后开始")
+                    }
                 }
+                withContext(Dispatchers.Main) { overlayView?.resetSealButton() }
             }
             return
         }
@@ -575,25 +580,31 @@ class AssistantService : Service() {
      * 结论写 games.review_json 与知识库。复盘完成后 recorder 重置。
      */
     private fun sealAndReview() {
-        if (reviewJob?.isActive == true) return
+        if (reviewJob?.isActive == true) {
+            serviceScope.launch {
+                withContext(Dispatchers.Main) { showOverlay("复盘中,请稍候...") }
+            }
+            return
+        }
         if (recorder.isEmpty) {
             serviceScope.launch {
                 withContext(Dispatchers.Main) { showOverlay("尚无对局记录") }
             }
             return
         }
-        autoJob?.cancel()
-        autoJob = null
-        awaitingNextGame = true
-        val game = com.cheese.assistant.db.GameEntity(
-            startedAt = recorder.startedAt,
-            endedAt = System.currentTimeMillis(),
-            userIsRed = recorder.userIsRed,
-            moveListJson = recorder.toJson(),
-        )
-        val moves = recorder.movesSnapshot()
-        val userIsRed = recorder.userIsRed
         reviewJob = serviceScope.launch(Dispatchers.IO) {
+            // 确保识别循环彻底退出(进行中的搜索要跑完native轮询)再复盘
+            autoJob?.cancelAndJoin()
+            autoJob = null
+            awaitingNextGame = true
+            val game = com.cheese.assistant.db.GameEntity(
+                startedAt = recorder.startedAt,
+                endedAt = System.currentTimeMillis(),
+                userIsRed = recorder.userIsRed,
+                moveListJson = recorder.toJson(),
+            )
+            val moves = recorder.movesSnapshot()
+            val userIsRed = recorder.userIsRed
             val db = AppDb.get(this@AssistantService)
             val gameId = runCatching { db.gameDao().insert(game) }
                 .onFailure { android.util.Log.e("SealReview", "insert game failed", it) }
@@ -632,10 +643,8 @@ class AssistantService : Service() {
         view.setText(initialText)
         view.setUserSide(recorder.userIsRed)
         view.setOnCloseListener { stopSelf() }
-        view.setOnSealListener {
-            startService(Intent(this, AssistantService::class.java)
-                .setAction(Action.SEAL))
-        }
+        // 直调而非 startService:后台 startService 间接层不必要,直调保证点击必达
+        view.setOnSealListener { onSealButton() }
         view.setOnRetriggerListener { retriggerRecognition() }
         view.setOnSideToggleListener { isRed ->
             recorder.setUserSide(isRed)

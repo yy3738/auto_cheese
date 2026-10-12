@@ -13,9 +13,10 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * 悬浮窗信息条：蓝白主题圆角卡片。
- * 布局：标题栏(拖动+执方+结/下一局+关闭) → 上次走子行 → 推荐列表(带打吃徽章)
- * → 降级状态行(识别不可信时显示,附重触发按钮)。
+ * 悬浮窗信息条：蓝白主题卡片。
+ * 版式：藏蓝实底标题栏(拖动+执方+结/下一局+关闭,白字) → 上一手行
+ * → 推荐列表(序号徽章;打吃=藏蓝「吃」圆牌+着法藏蓝加粗,将军=朱红「将」圆牌
+ * +着法朱红加粗) → 降级状态行(琥珀提示+重试)。
  * 支持收起为小圆点：轮到你=藏蓝实心,对手回合=灰白描边,点击切换。
  */
 @SuppressLint("ViewConstructor")
@@ -26,51 +27,54 @@ class OverlayView(context: Context) : LinearLayout(context) {
     private val colorTextSecondary = 0xFF64748B.toInt()
     private val colorNavy = 0xFF234B94.toInt()
     private val colorNavyLight = 0xFF3A63B5.toInt()
+    private val colorVermillion = 0xFFD64545.toInt()
     private val colorLine = 0xFFCBD5E1.toInt()
     private val colorDisabled = 0xFF94A3B8.toInt()
+    private val colorAmber = 0xFFB45309.toInt()
 
     /** 收起态:是否轮到用户(决定圆点样式) */
     private var userTurn = true
 
     // ---- 展开态控件 ----
+
     private val titleView = TextView(context).apply {
-        text = "♟ 棋室"
-        setTextColor(colorNavy)
+        text = "棋室"
+        setTextColor(0xFFFFFFFF.toInt())
         setTypeface(Typeface.SERIF, Typeface.BOLD)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        letterSpacing = 0.15f
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(12), dp(6), dp(12), dp(6))
     }
 
     /** 执方切换按钮:显示当前执方,点一下翻转(手动覆盖) */
     private val sideButton = TextView(context).apply {
         text = "红"
-        setTextColor(colorNavy)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        setTextColor(0xFFFFFFFF.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         gravity = Gravity.CENTER
-        setPadding(dp(11), dp(3), dp(11), dp(3))
-        background = pill(0x14234B94)
+        setPadding(dp(10), dp(2), dp(10), dp(2))
+        background = pill(0x33FFFFFF)
     }
 
     /** 封存按钮。对局中="结"(封存并复盘);封存后="下一局"(清谱+状态机归位) */
     private val sealButton = TextView(context).apply {
         text = "结"
         setTextColor(colorNavy)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         gravity = Gravity.CENTER
-        setPadding(dp(11), dp(3), dp(11), dp(3))
-        background = outline(colorNavy)
+        setPadding(dp(11), dp(2), dp(11), dp(2))
+        background = pill(0xFFFFFFFF)
     }
 
     private val closeButton = TextView(context).apply {
         text = "✕"
-        setTextColor(colorTextSecondary)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextColor(0xB3FFFFFF.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         gravity = Gravity.CENTER
-        setPadding(dp(12), dp(3), dp(12), dp(3))
+        setPadding(dp(11), dp(2), dp(11), dp(2))
     }
 
-    /** 上次走子:推荐区顶部常驻,降级时保持可见作为局面锚点 */
+    /** 上一手:推荐区顶部常驻,降级时保持可见作为局面锚点 */
     private val lastMoveView = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
         setTextColor(colorTextSecondary)
@@ -78,33 +82,37 @@ class OverlayView(context: Context) : LinearLayout(context) {
         visibility = View.GONE
     }
 
-    /** 推荐列表:每行"徽章+着法+评分" */
+    /** 推荐列表:每行"徽章+着法" */
     private val suggestionContainer = LinearLayout(context).apply {
         orientation = VERTICAL
-        setPadding(dp(8), dp(2), dp(8), dp(6))
+        setPadding(dp(8), dp(4), dp(8), dp(8))
     }
 
-    /** 降级状态行:识别不可信时显示(灰字+重触发按钮),正常时隐藏 */
+    /** 降级状态行:识别不可信时显示(琥珀提示+重触发按钮),正常时隐藏 */
     private val degradedRow = LinearLayout(context).apply {
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(14), dp(2), dp(14), dp(8))
+        setPadding(dp(14), dp(4), dp(14), dp(8))
         visibility = View.GONE
+        background = GradientDrawable().apply {
+            cornerRadius = dp(10).toFloat()
+            setColor(0x14D97706)
+        }
     }
 
     private val degradedText = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-        setTextColor(colorDisabled)
+        setTextColor(colorAmber)
         setPadding(0, 0, dp(10), 0)
     }
 
     private val retriggerButton = TextView(context).apply {
         text = "重试识别"
-        setTextColor(colorNavy)
+        setTextColor(colorAmber)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         gravity = Gravity.CENTER
         setPadding(dp(10), dp(4), dp(10), dp(4))
-        background = outline(colorNavy)
+        background = outline(colorAmber)
         setOnClickListener { onRetrigger?.invoke() }
     }
 
@@ -130,18 +138,23 @@ class OverlayView(context: Context) : LinearLayout(context) {
 
     init {
         orientation = VERTICAL
+        clipToOutline = true
         background = GradientDrawable().apply {
-            setColor(0xD9F8FAFD.toInt()) // rgba(248,250,253,0.85)
-            cornerRadius = dp(14).toFloat()
+            setColor(0xF2F8FAFD.toInt())
+            cornerRadius = dp(16).toFloat()
             setStroke(dp(1), colorLine)
         }
 
         handleBar = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(6), dp(8), dp(6))
+            background = headerShape()
             addView(titleView, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(sideButton)
+            addView(space(dp(5)))
             addView(sealButton)
+            addView(space(dp(5)))
             addView(closeButton)
         }
 
@@ -160,6 +173,20 @@ class OverlayView(context: Context) : LinearLayout(context) {
             LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.CENTER
         })
+    }
+
+    /** 标题栏藏蓝底要盖住卡片圆角外的直角:圆角只有顶部两角 */
+    private fun headerShape(): GradientDrawable = GradientDrawable().apply {
+        orientation = GradientDrawable.Orientation.LEFT_RIGHT
+        colors = intArrayOf(colorNavy, colorNavyLight)
+        cornerRadii = floatArrayOf(
+            dp(15).toFloat(), dp(15).toFloat(),
+            dp(15).toFloat(), dp(15).toFloat(),
+            0f, 0f, 0f, 0f)
+    }
+
+    private fun space(px: Int): View = View(context).also {
+        it.layoutParams = LinearLayout.LayoutParams(px, 1)
     }
 
     // ---- 收起/展开 ----
@@ -233,13 +260,13 @@ class OverlayView(context: Context) : LinearLayout(context) {
         }
     }
 
-    /** 上次走子提示,如 "对手：炮8平7"。空串隐藏 */
+    /** 上一手提示,如 "上一手 · 炮8平7"。空串隐藏 */
     fun setLastMove(text: String) {
         lastMoveView.text = text
         lastMoveView.visibility = if (expanded && text.isNotEmpty()) VISIBLE else GONE
     }
 
-    /** 识别降级状态:显示灰字+重试按钮;null/空 = 正常,隐藏该行 */
+    /** 识别降级状态:显示琥珀提示+重试按钮;null/空 = 正常,隐藏该行 */
     fun setDegraded(reason: String?) {
         degraded = !reason.isNullOrEmpty()
         degradedText.text = reason ?: ""
@@ -248,9 +275,20 @@ class OverlayView(context: Context) : LinearLayout(context) {
         suggestionContainer.alpha = if (degraded) 0.4f else 1f
     }
 
-    /** 封存完成后切"下一局"状态 */
+    /** 封存完成后切"下一局"状态:朱红实底强调,引导进入下一局 */
     fun showNextGameMode() {
         sealButton.text = "下一局"
+        sealButton.setTextColor(0xFFFFFFFF.toInt())
+        sealButton.setPadding(dp(12), dp(3), dp(12), dp(3))
+        sealButton.background = pill(colorVermillion.toLong())
+    }
+
+    /** 新一局开始:从"下一局"态复位为对局中的"结" */
+    fun resetSealButton() {
+        sealButton.text = "结"
+        sealButton.setTextColor(colorNavy)
+        sealButton.setPadding(dp(11), dp(2), dp(11), dp(2))
+        sealButton.background = pill(0xFFFFFFFF)
     }
 
     fun setOnCloseListener(listener: () -> Unit) {
@@ -281,7 +319,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
     var recorderSide: Boolean = true
         private set
 
-    /** 执方按钮显示同步(藏蓝系,红/黑区分靠文字) */
+    /** 执方按钮显示同步(藏蓝栏内白字) */
     fun setUserSide(isRed: Boolean) {
         recorderSide = isRed
         sideButton.text = if (isRed) "红" else "黑"
@@ -314,8 +352,9 @@ class OverlayView(context: Context) : LinearLayout(context) {
     }
 
     /**
-     * 推荐行:序号即徽章。
-     * 有威胁=藏蓝实心圆白字;将军=加粗外圈;无威胁=灰蓝细描边空心圆。
+     * 推荐行:**威胁用字面标签,直读不用猜**。
+     * 将军=朱红实心圆「将」+着法朱红加粗;打吃=藏蓝实心圆「吃」+着法藏蓝;
+     * 无威胁=空心圆序号+普通着法。
      */
     private fun suggestionRow(index: Int, moveText: String, threat: ThreatLevel): View {
         val row = LinearLayout(context).apply {
@@ -323,45 +362,56 @@ class OverlayView(context: Context) : LinearLayout(context) {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(6), dp(3), dp(6), dp(3))
         }
+        val isCheck = threat == ThreatLevel.CHECK
+        val isCapture = threat == ThreatLevel.CAPTURE
         val badge = TextView(context).apply {
-            text = "$index"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTypeface(Typeface.DEFAULT_BOLD)
             gravity = Gravity.CENTER
         }
         val size = dp(22)
         badge.layoutParams = LinearLayout.LayoutParams(size, size).apply {
             marginEnd = dp(8)
         }
-        when (threat) {
-            ThreatLevel.CHECK -> {
-                badge.background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
+        badge.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            when {
+                isCheck -> {
+                    setColor(colorVermillion)
+                    setStroke(dp(2), colorVermillion)
+                }
+                isCapture -> {
                     setColor(colorNavy)
                     setStroke(dp(2), colorNavyLight)
                 }
-                badge.setTextColor(0xFFFFFFFF.toInt())
-            }
-            ThreatLevel.CAPTURE -> {
-                badge.background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(colorNavy)
-                }
-                badge.setTextColor(0xFFFFFFFF.toInt())
-            }
-            ThreatLevel.NONE -> {
-                badge.background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
+                else -> {
                     setColor(0x00000000)
                     setStroke(dp(1), colorLine)
                 }
-                badge.setTextColor(colorTextSecondary)
             }
         }
+        badge.text = when {
+            isCheck -> "将"
+            isCapture -> "吃"
+            else -> "$index"
+        }
+        badge.setTextColor(if (threat == ThreatLevel.NONE) colorTextSecondary
+        else 0xFFFFFFFF.toInt())
         row.addView(badge)
         row.addView(TextView(context).apply {
             text = moveText
-            setTextColor(colorTextPrimary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            when {
+                isCheck -> {
+                    setTextColor(colorVermillion)
+                    setTypeface(Typeface.DEFAULT_BOLD)
+                }
+                isCapture -> {
+                    setTextColor(colorNavy)
+                    setTypeface(Typeface.DEFAULT_BOLD)
+                }
+                else -> setTextColor(colorTextPrimary)
+            }
         })
         return row
     }

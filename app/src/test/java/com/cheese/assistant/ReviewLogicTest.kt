@@ -457,7 +457,7 @@ class OcclusionTest {
 
 class MoveFormatterTest {
 
-    // 黑车在 rank6 col7(车8)，卒在 col0/2/4/8
+    // 黑车在 rank6 col7(黑方视角右起第2路)，卒在 col0/2/4/8
     private val blackRookFen =
         "2bak1b2/9/2n1b1n2/p1p1p1prp/9/9/P1P1P3P/1C2C4/9/RNBAKABNR b"
     private val startFen =
@@ -466,13 +466,13 @@ class MoveFormatterTest {
     @Test
     fun `黑车直线进1步不显示目标纵线号`() {
         // 旧bug: "进N"显示目标rank而非步数(如"卒3进5"实为进1步)
-        assertEquals("车8进1", MoveFormatter.toChinese(blackRookFen, "h6h5"))
+        assertEquals("车2进1", MoveFormatter.toChinese(blackRookFen, "h6h5"))
     }
 
     @Test
     fun `黑车同列后退显示退`() {
         // 旧bug: 同列直线无条件写"进"
-        assertEquals("车8退1", MoveFormatter.toChinese(blackRookFen, "h6h7"))
+        assertEquals("车2退1", MoveFormatter.toChinese(blackRookFen, "h6h7"))
     }
 
     @Test

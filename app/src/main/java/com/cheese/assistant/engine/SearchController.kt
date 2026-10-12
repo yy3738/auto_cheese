@@ -2,6 +2,8 @@ package com.cheese.assistant.engine
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 data class SearchResult(
@@ -22,6 +24,11 @@ class SearchController(
     private val threads: Int = 3,
 ) {
     private var engine: PikafishEngine? = null
+
+    // 引擎是单进程单状态:set_position/go 出口只有一个。autoLoop 的协作式
+    // 取消打断不了进行中的搜索(native 轮询无挂起点),复盘若不串行等待
+    // 就会与残留搜索交错,污染引擎状态(实测表现:分析中途整体卡死)
+    private val searchMutex = Mutex()
 
     /** 解压 NNUE 权重到内部存储并启动引擎。 */
     suspend fun start(context: Context): Boolean = withContext(Dispatchers.IO) {
@@ -47,20 +54,21 @@ class SearchController(
 
     /** 对给定 FEN 做 movetime 限时搜索。非法局面（如缺王）返回空结果而非崩溃。
      *  multiPv 覆盖本局的 MultiPV（复盘需要更宽候选把用户着法包进来），随后恢复。 */
-    suspend fun search(fen: String, movetime: Int = movetimeMs, multiPv: Int = this.multiPv): SearchResult =
-        withContext(Dispatchers.Default) {
-            val e = engine ?: error("engine not started")
-            if (multiPv != this@SearchController.multiPv) {
+    suspend fun search(fen: String, movetime: Int = movetimeMs, multiPv: Int = this.multiPv): SearchResult {
+        val e = engine ?: error("engine not started")
+        return if (multiPv != this@SearchController.multiPv) {
+            searchMutex.withLock {
                 e.nativeSetOption("MultiPV", "$multiPv")
-            }
-            try {
-                searchInternal(e, fen, movetime)
-            } finally {
-                if (multiPv != this@SearchController.multiPv) {
+                try {
+                    searchInternal(e, fen, movetime)
+                } finally {
                     e.nativeSetOption("MultiPV", "${this@SearchController.multiPv}")
                 }
             }
+        } else {
+            searchMutex.withLock { searchInternal(e, fen, movetime) }
         }
+    }
 
     private suspend fun searchInternal(
         e: PikafishEngine,

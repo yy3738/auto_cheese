@@ -101,9 +101,9 @@ object MoveFormatter {
         val fileOf = { sq: String -> sq[0] - 'a' }          // 0..8
         val rankOf = { sq: String -> sq[1].digitToInt() }  // 0..9
 
-        // 纵线号：红方视角 file 8 -> "一"，黑方视角 file 0 -> "1"
+        // 纵线号：双方统一从屏幕右侧数 1-9（用户要求与红方同向）
         fun fileLabel(file: Int): String =
-            if (red) CN_NUM[8 - file] else "${file + 1}"
+            if (red) CN_NUM[8 - file] else "${9 - file}"
 
         // 直线着法的步进数：进几格就是数字几（红方用汉字）
         fun stepLabel(from: String, to: String): String {
