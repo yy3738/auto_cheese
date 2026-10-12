@@ -101,30 +101,11 @@ class BoardWatcher(
             return null
         }
         android.util.Log.d("BoardWatcher", "position OK pieces=$pieces")
-        return Observed(pos, bottomSideIsRed(result.position)).also { lastGood = it }
+        return Observed(pos, MoveCheck.userIsRed(result.position)).also { lastGood = it }
     }
 
     /** 识别成功的一帧：归一化局面 + 用户执方（屏幕最下一排的王色 = 用户） */
     class Observed(val pos: Position, val userIsRed: Boolean)
-
-    /**
-     * 识别矩阵 row9（屏幕最下一排）的王色 = 用户执方（约定"下面的肯定是我"）。
-     * 找不到王（异常局面）默认红。
-     */
-    private fun bottomSideIsRed(raw: Position): Boolean {
-        // 正常情况王在 row9；网格吸附偶发漂移一行时王在 row8——按"靠屏幕下方的王"取执方
-        for (row in 9 downTo 8) {
-            for (c in 0..8) {
-                when (raw.board[row * 9 + c]) {
-                    Piece.R_KING -> return true
-                    Piece.B_KING -> return false
-                    else -> Unit
-                }
-            }
-        }
-        android.util.Log.e("BoardWatcher", "bottomSideIsRed: no king in bottom rows, fallback red")
-        return true
-    }
 
     /** 识别失败帧落盘（app 内部存储），adb pull 出来给 PC 端 diag 对比 */
     private fun dumpFrame(bmp: Bitmap) {
@@ -201,6 +182,26 @@ class BoardWatcher(
  * （可吃子），其余 88 点不变。用于过滤动画中间帧与识别抖动。
  */
 object MoveCheck {
+
+    /**
+     * 用户执方：屏幕矩阵中两个王行号较大（靠屏幕下方）的王 = 用户。
+     * 不限定扫描窗（旧版只看 row9/row8）：残局用户的將可以合法走到九宫
+     * 顶线（row7），限定窗会落空——旧版此时静默 fallback 成红方，执方
+     * 整体翻转（2026-10-12 实测"红方回合"误报的根因）。调用前局面已过
+     * 双王俱在校验，两王必然存在，无需兜底。
+     */
+    fun userIsRed(raw: Position): Boolean {
+        var redRow = -1
+        var blackRow = -1
+        for (i in 0 until 90) {
+            when (raw.board[i]) {
+                Piece.R_KING -> redRow = i / 9
+                Piece.B_KING -> blackRow = i / 9
+                else -> Unit
+            }
+        }
+        return redRow > blackRow
+    }
 
     /**
      * 返回该步移动者的颜色(isPlausibleStep 的信息版)。null = 不是合法单步。

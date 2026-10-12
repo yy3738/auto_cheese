@@ -417,6 +417,42 @@ class OcclusionTest {
         val cur2 = Position(board(65 to Piece.R_ROOK, 20 to Piece.R_KNIGHT), true)
         assertEquals(true, MoveCheck.ghostMoverIsRed(prev2, cur2))
     }
+
+    @Test
+    fun `执方判定红上黑下用户执黑`() {
+        // 常规:红王 row0(屏幕上),黑王 row9(屏幕下) → 用户执黑
+        val pos = Position(board(4 to Piece.R_KING, 85 to Piece.B_KNIGHT), true)
+        val pos2 = Position(board(4 to Piece.R_KING, 85 to Piece.B_KING), true)
+        assertEquals(false, MoveCheck.userIsRed(pos2))
+        @Suppress("UNUSED_VARIABLE") val unused = pos
+    }
+
+    @Test
+    fun `执方判定红下黑上用户执红`() {
+        // JJ 让用户执红坐屏幕下方:红王 row9,黑王 row0
+        val pos = Position(board(4 to Piece.R_KING, 85 to Piece.B_KING), true)
+        val flipped = Position(Array(90) { i ->
+            val r = i / 9; val c = i % 9
+            pos.board[(9 - r) * 9 + c]
+        }, true)
+        assertTrue(MoveCheck.userIsRed(flipped))
+    }
+
+    @Test
+    fun `执方判定王在九宫顶线row7仍正确`() {
+        // 实测 bug 现场:黑将走到九宫顶线 row7(将士士缩宫顶),旧扫描窗
+        // (row9-8)落空后静默 fallback 成红方。新逻辑按双王行比较不受影响
+        val pos = Position(board(4 to Piece.R_KING, 76 to Piece.B_KING,
+            67 to Piece.B_ADVISOR, 66 to Piece.B_ADVISOR), true)
+        assertEquals(false, MoveCheck.userIsRed(pos))
+    }
+
+    @Test
+    fun `执方判定用户王也缩到宫顶线时红王仍在底线`() {
+        // 红王 row9 黑王 row7:红在屏幕更下方 → 用户执红
+        val pos = Position(board(85 to Piece.R_KING, 76 to Piece.B_KING), true)
+        assertTrue(MoveCheck.userIsRed(pos))
+    }
 }
 
 class MoveFormatterTest {

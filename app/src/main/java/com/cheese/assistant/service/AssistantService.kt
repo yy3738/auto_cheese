@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.IBinder
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -17,6 +18,7 @@ import androidx.core.app.NotificationCompat
 import com.cheese.assistant.R
 import com.cheese.assistant.board.MoveFormatter
 import com.cheese.assistant.board.Position
+import com.cheese.assistant.board.ThreatMarker
 import com.cheese.assistant.board.Zobrist
 import com.cheese.assistant.capture.ScreenCapture
 import com.cheese.assistant.db.AppDb
@@ -103,7 +105,7 @@ class AssistantService : Service() {
                     .putBoolean(PREF_AUTO_ON, true).apply()
                 startAutoLoop()
             }
-            Action.SEAL -> sealAndReview()
+            Action.SEAL -> onSealButton()
         }
         return START_STICKY
     }
@@ -137,21 +139,55 @@ class AssistantService : Service() {
         return if (ok) c else null
     }
 
-    private suspend fun analyzeText(fen: String): String {
-        val ctl = ensureController() ?: return "引擎初始化失败"
+    /** 单条候选:着法文本/评分/威胁级别/原始move */
+    data class Candidate(val line: String, val iccs: String, val threat: ThreatLevel)
+
+    private suspend fun analyzeCandidates(fen: String): List<Candidate> {
+        val ctl = ensureController() ?: return listOf(
+            Candidate("引擎初始化失败", "", ThreatLevel.NONE))
+        // 知识库快速路径：用户行棋局面命中且深度达标秒回
+        val pos = Position.fromFen(fen)
+        if (pos != null && recorder.isUserToMove()) {
+            val hash = Zobrist.of(pos.board, pos.redToMove)
+            val hit = runCatching { AppDb.get(this@AssistantService).positionDao().get(hash) }
+                .onFailure { android.util.Log.e("AutoLoop", "kb query failed", it) }
+                .getOrNull()
+            if (hit != null && hit.depth >= KB_MIN_DEPTH) {
+                android.util.Log.d("AutoLoop", "kb hit depth=${hit.depth}")
+                val score = hit.mateIn?.let { m -> "杀 $m" }
+                    ?: String.format("%+.1f", hit.bestScoreCp / 100.0)
+                val threat = when (ThreatMarker.of(fen, hit.bestMove)) {
+                    ThreatMarker.Level.CHECK -> ThreatLevel.CHECK
+                    ThreatMarker.Level.CAPTURE -> ThreatLevel.CAPTURE
+                    ThreatMarker.Level.NONE -> ThreatLevel.NONE
+                }
+                return listOf(Candidate(
+                    "库 ${score}  ${MoveFormatter.toChinese(hit.fen, hit.bestMove)}",
+                    hit.bestMove, threat))
+            }
+        }
         return try {
             val result = ctl.search(fen)
             // 局面非法(幻影子/缺王)时引擎拒绝搜索:明确提示,不留旧推荐误导
-            if (result.failed) "局面异常,重新定位中..."
-            else result.candidates.joinToString("\n") { c ->
+            if (result.failed) listOf(Candidate("局面异常,重新定位中...", "", ThreatLevel.NONE))
+            else result.candidates.map { c ->
+                val move = c.pv.first()
                 val score = c.mateIn?.let { m -> if (m > 0) "杀 $m" else "被杀 $m" }
                     ?: String.format("%+.1f", c.scoreCp!! / 100.0)
-                "$score  ${MoveFormatter.toChinese(fen, c.pv.first())}"
-            }.ifEmpty { "无结果" }
+                val threat = when (ThreatMarker.of(fen, move)) {
+                    ThreatMarker.Level.CHECK -> ThreatLevel.CHECK
+                    ThreatMarker.Level.CAPTURE -> ThreatLevel.CAPTURE
+                    ThreatMarker.Level.NONE -> ThreatLevel.NONE
+                }
+                Candidate("$score  ${MoveFormatter.toChinese(fen, move)}", move, threat)
+            }.ifEmpty { listOf(Candidate("无结果", "", ThreatLevel.NONE)) }
         } catch (t: Throwable) {
-            "搜索失败: ${t.message}"
+            listOf(Candidate("搜索失败: ${t.message}", "", ThreatLevel.NONE))
         }
     }
+
+    private suspend fun analyzeText(fen: String): String =
+        analyzeCandidates(fen).joinToString("\n") { it.line }
 
     /**
      * 自动识别循环：抓帧等画面稳定 → 识别 → 与上一局面比对（恰好一步或
@@ -212,7 +248,10 @@ class AssistantService : Service() {
                     // 连续 3 次失败才提示等待——单帧识别失败不该把候选从悬浮窗上刷掉
                     if (++consecutiveFails >= 3) {
                         overlayInWait = true
-                        withContext(Dispatchers.Main) { showOverlay("等待稳定棋盘画面...") }
+                        withContext(Dispatchers.Main) {
+                            showOverlay("等待稳定棋盘画面...")
+                            overlayView?.setDegraded("识别不稳定，正在等待画面…")
+                        }
                     }
                     continue
                 }
@@ -228,7 +267,10 @@ class AssistantService : Service() {
                         android.util.Log.d("AutoLoop", "impossible pawn, frame ignored")
                         if (++consecutiveFails >= 3) {
                             overlayInWait = true
-                            withContext(Dispatchers.Main) { showOverlay("等待稳定棋盘画面...") }
+                            withContext(Dispatchers.Main) {
+                                showOverlay("等待稳定棋盘画面...")
+                                overlayView?.setDegraded("识别不稳定，正在等待画面…")
+                            }
                         }
                         delay(600)
                         continue
@@ -245,6 +287,7 @@ class AssistantService : Service() {
                 if (overlayInWait) {
                     // 识别恢复:先把候选文本请回来,否则去重逻辑会让候选永远停在"等待"
                     overlayInWait = false
+                    withContext(Dispatchers.Main) { overlayView?.setDegraded(null) }
                     lastOverlayText?.let { t ->
                         withContext(Dispatchers.Main) { showOverlay(t) }
                     }
@@ -424,28 +467,6 @@ class AssistantService : Service() {
         withContext(Dispatchers.Main) { overlayView?.setUserSide(isRed) }
     }
 
-    /**
-     * 单局面分析：用户行棋局面优先查知识库（命中且深度达标秒回，ADR-0003），
-     * 未命中照常引擎搜索。
-     */
-    private suspend fun analyzeWithKnowledge(fen: String): String {
-        val ctl = ensureController() ?: return "引擎初始化失败"
-        val pos = Position.fromFen(fen)
-        if (pos != null && recorder.isUserToMove()) {
-            val hash = Zobrist.of(pos.board, pos.redToMove)
-            val hit = runCatching { AppDb.get(this@AssistantService).positionDao().get(hash) }
-                .onFailure { android.util.Log.e("AutoLoop", "kb query failed", it) }
-                .getOrNull()
-            if (hit != null && hit.depth >= KB_MIN_DEPTH) {
-                android.util.Log.d("AutoLoop", "kb hit depth=${hit.depth}")
-                val score = hit.mateIn?.let { m -> "杀 $m" }
-                    ?: String.format("%+.1f", hit.bestScoreCp / 100.0)
-                return "库 ${score}  ${MoveFormatter.toChinese(hit.fen, hit.bestMove)}"
-            }
-        }
-        return analyzeText(fen)
-    }
-
     // 最近已分析的局面(fen|轮到用户)集合——识别抖动在两个棋盘版本间往返时,
     // 单槽去重会被交替冲穿(上次只记一个 FEN),保留最近 8 个彻底消除重复计算
     private val analyzedKeys = ArrayDeque<String>()
@@ -473,21 +494,79 @@ class AssistantService : Service() {
         if (!userTurn) {
             // 实战辅助只给用户自己的走法;对手回合不占引擎
             lastOverlayText = "对手回合 · 等你落子 (${pieces}子 $stamp)"
-            withContext(Dispatchers.Main) { showOverlay(lastOverlayText!!) }
+            withContext(Dispatchers.Main) {
+                overlayView?.apply {
+                    setText(lastOverlayText!!)
+                    setLastMove(lastMoveLabel())
+                    setUserTurn(false)
+                }
+            }
             return
         }
         val side = if (redToMove) "红方" else "黑方"
         withContext(Dispatchers.Main) { showOverlay("${side}回合 分析中...") }
-        val text = analyzeWithKnowledge(Position(pos.board, redToMove).toFen())
-        if (text.contains("局面异常") || text.contains("搜索失败")) {
+        val candidates = analyzeCandidates(Position(pos.board, redToMove).toFen())
+        val first = candidates.firstOrNull()?.line ?: ""
+        if (first.contains("局面异常") || first.contains("搜索失败")) {
             // 失败结果不缓存:去重 key 会挡住重试,悬浮窗从此卡死旧文本。
             // 不记 analyzedKeys、不写 lastOverlayText,下一帧自动重新分析
-            withContext(Dispatchers.Main) { showOverlay("${side}回合 $text") }
+            withContext(Dispatchers.Main) {
+                showOverlay("${side}回合 $first")
+                overlayView?.setUserTurn(false)
+            }
             return
         }
         markAnalyzed(key)
-        lastOverlayText = "${side}回合 (${pieces}子 $stamp)\n$text"
-        withContext(Dispatchers.Main) { showOverlay(lastOverlayText!!) }
+        lastOverlayText = "${side}回合 (${pieces}子 $stamp)"
+        withContext(Dispatchers.Main) {
+            overlayView?.apply {
+                setText(lastOverlayText!!)
+                setSuggestions(candidates.mapIndexed { i, c ->
+                    Triple(i + 1, c.line, c.threat)
+                })
+                setLastMove(lastMoveLabel())
+                setUserTurn(true)
+            }
+        }
+    }
+
+    /** 上次走子标签:棋谱最后一步,按走子方显示"对手："或"你：" */
+    private fun lastMoveLabel(): String {
+        val moves = recorder.movesSnapshot()
+        if (moves.isEmpty()) return ""
+        val last = moves.last()
+        // 走子方 = fenBefore 的行棋方
+        val moverIsRed = last.fenBefore.split(" ").getOrNull(1) != "b"
+        val moverIsUser = moverIsRed == recorder.userIsRed
+        val who = if (moverIsUser) "你" else "对手"
+        val cn = runCatching {
+            MoveFormatter.toChinese(last.fenBefore, last.iccs)
+        }.getOrDefault(last.iccs)
+        return "$who：$cn"
+    }
+
+    /** 封存/下一局按钮:对局中=封存并复盘;复盘完成后=下一局(清状态归位) */
+    private var awaitingNextGame = false
+
+    private fun onSealButton() {
+        if (awaitingNextGame) {
+            awaitingNextGame = false
+            // 清棋谱与悬浮窗状态机归位
+            recorder.reset()
+            analyzedKeys.clear()
+            lastOverlayText = null
+            autoJob?.cancel()
+            autoJob = null
+            if (ScreenCapture.isRunning) {
+                startAutoLoop()
+            } else {
+                serviceScope.launch(Dispatchers.Main) {
+                    showOverlay("新对局已就绪\n请回主界面完成截屏授权后开始")
+                }
+            }
+            return
+        }
+        sealAndReview()
     }
 
     /**
@@ -505,6 +584,7 @@ class AssistantService : Service() {
         }
         autoJob?.cancel()
         autoJob = null
+        awaitingNextGame = true
         val game = com.cheese.assistant.db.GameEntity(
             startedAt = recorder.startedAt,
             endedAt = System.currentTimeMillis(),
@@ -537,6 +617,7 @@ class AssistantService : Service() {
             recorder.reset()
             withContext(Dispatchers.Main) {
                 showOverlay("复盘完成\n失误$mistakes 大漏着$majors\n(主界面「对局复盘」查看)")
+                overlayView?.showNextGameMode()
             }
         }
     }
@@ -555,11 +636,17 @@ class AssistantService : Service() {
             startService(Intent(this, AssistantService::class.java)
                 .setAction(Action.SEAL))
         }
+        view.setOnRetriggerListener { retriggerRecognition() }
         view.setOnSideToggleListener { isRed ->
             recorder.setUserSide(isRed)
         }
+        // 点圆点展开:窗口尺寸同步恢复
+        view.onExpand = {
+            view.setExpanded(true)
+            resizeOverlayWindow(view, collapsed = false)
+        }
 
-        // 拖动：按住标题栏移动整个窗口
+        // 拖动：按住标题栏移动整个窗口；位移很小的抬起视为点击 → 收起为圆点
         var downX = 0f
         var downY = 0f
         var startX = 0
@@ -577,6 +664,14 @@ class AssistantService : Service() {
                     lp.x = startX + (event.rawX - downX).toInt()
                     lp.y = startY + (event.rawY - downY).toInt()
                     windowManager.updateViewLayout(view, lp)
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (kotlin.math.abs(event.rawX - downX) < 12 &&
+                        kotlin.math.abs(event.rawY - downY) < 12) {
+                        view.setExpanded(false)
+                        resizeOverlayWindow(view, collapsed = true)
+                    }
                     true
                 }
                 else -> false
@@ -601,6 +696,34 @@ class AssistantService : Service() {
         }
         windowManager.addView(view, lp)
         overlayView = view
+    }
+
+    /** 收起/展开切换窗口尺寸:收起=固定小圆点大小,展开=内容自适应 */
+    private fun resizeOverlayWindow(view: OverlayView, collapsed: Boolean) {
+        val lp = view.layoutParams as WindowManager.LayoutParams
+        val size = dp(40)
+        lp.width = if (collapsed) size else WindowManager.LayoutParams.WRAP_CONTENT
+        lp.height = if (collapsed) size else WindowManager.LayoutParams.WRAP_CONTENT
+        try {
+            windowManager.updateViewLayout(view, lp)
+        } catch (_: Exception) {}
+    }
+
+    private fun dp(v: Int): Int =
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(),
+            resources.displayMetrics).toInt()
+
+    /**
+     * 手动重触发识别：识别降级/卡死时用户点的出口。
+     * 强制重启 autoLoop（清掉 stale 的 pending 状态），重新走"等稳定→识别→校验"。
+     */
+    private fun retriggerRecognition() {
+        autoJob?.cancel()
+        autoJob = null
+        serviceScope.launch(Dispatchers.Main) {
+            showOverlay("重新识别中...")
+        }
+        if (ScreenCapture.isRunning) startAutoLoop()
     }
 
     private fun removeOverlay() {

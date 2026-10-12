@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
- * 对局记录列表:棋室主题(墨底/木色标题/朱砂坏棋标),点行展开复盘明细。
+ * 对局记录列表:蓝白主题(白底/藏蓝标题/红标坏棋),点行展开复盘明细。
  */
 class ReviewActivity : Activity() {
 
@@ -36,12 +36,12 @@ class ReviewActivity : Activity() {
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF141210.toInt())
+            setBackgroundColor(0xFFF8FAFD.toInt())
             addView(TextView(this@ReviewActivity).apply {
                 text = "复 盘"
                 textSize = 26f
                 typeface = Typeface.SERIF
-                setTextColor(0xFFE8C88F.toInt())
+                setTextColor(0xFF234B94.toInt())
                 letterSpacing = 0.3f
                 setPadding(dp(2), dp(18), dp(2), dp(2))
                 setOnClickListener { finish() }
@@ -49,7 +49,7 @@ class ReviewActivity : Activity() {
             addView(TextView(this@ReviewActivity).apply {
                 text = "← 返回   ·   点行展开明细"
                 textSize = 12f
-                setTextColor(0xFFB5AA98.toInt())
+                setTextColor(0xFF64748B.toInt())
                 setPadding(dp(2), 0, dp(2), dp(10))
             })
         }
@@ -74,7 +74,7 @@ class ReviewActivity : Activity() {
         if (games.isEmpty()) {
             container.addView(TextView(this).apply {
                 text = "还没有对局记录\n\n对局中点悬浮窗「结」按钮封存并复盘"
-                setTextColor(0xFF8A8074.toInt())
+                setTextColor(0xFF94A3B8.toInt())
                 setPadding(dp(8), dp(32), dp(8), dp(8))
             })
             return
@@ -109,7 +109,7 @@ class ReviewActivity : Activity() {
                     text = "第 ${g.id} 局"
                     textSize = 16f
                     typeface = Typeface.SERIF
-                    setTextColor(0xFFE8C88F.toInt())
+                    setTextColor(0xFF234B94.toInt())
                 }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 addView(TextView(this@ReviewActivity).apply {
                     text = when {
@@ -120,10 +120,10 @@ class ReviewActivity : Activity() {
                     textSize = 13f
                     setTextColor(
                         when {
-                            g.reviewStatus != GameEntity.STATUS_DONE -> 0xFFB5AA98.toInt()
-                            blunders >= 3 -> 0xFFE05A47.toInt()
-                            blunders > 0 -> 0xFFD4A85C.toInt()
-                            else -> 0xFF7FA88C.toInt()
+                            g.reviewStatus != GameEntity.STATUS_DONE -> 0xFF64748B.toInt()
+                            blunders >= 3 -> 0xFFB3352B.toInt()
+                            blunders > 0 -> 0xFFB7791F.toInt()
+                            else -> 0xFF2E7D5B.toInt()
                         }
                     )
                 })
@@ -131,7 +131,7 @@ class ReviewActivity : Activity() {
             addView(TextView(this@ReviewActivity).apply {
                 text = "${formatTime(g.endedAt)}   ${moves}步   ${g.finalResult}"
                 textSize = 12f
-                setTextColor(0xFFB5AA98.toInt())
+                setTextColor(0xFF64748B.toInt())
                 setPadding(0, dp(4), 0, 0)
             })
         }
@@ -142,7 +142,7 @@ class ReviewActivity : Activity() {
         text = buildDetailText(g)
         textSize = 13f
         typeface = Typeface.MONOSPACE
-        setTextColor(0xFFF0E9DD.toInt())
+        setTextColor(0xFF1A1A1A.toInt())
         setPadding(dp(18), dp(10), dp(14), dp(10))
     }
 
@@ -166,9 +166,9 @@ class ReviewActivity : Activity() {
     }
 
     private fun card(): GradientDrawable = GradientDrawable().apply {
-        setColor(0xFF26221E.toInt())
+        setColor(0xFFFFFFFF.toInt())
         cornerRadius = dp(12).toFloat()
-        setStroke(dp(1), 0xFF3A342C.toInt())
+        setStroke(dp(1), 0xFFCBD5E1.toInt())
     }
 
     private fun formatTime(ts: Long): String =

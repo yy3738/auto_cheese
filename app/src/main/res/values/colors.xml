@@ -1,17 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 棋室主题:墨色底 + 木质面 + 朱砂强调。全站共用,改这里即可整体换肤 -->
-    <color name="bg_deep">#FF141210</color>          <!-- 主底:近黑褐 -->
-    <color name="bg_panel">#FF1E1B18</color>         <!-- 面板 -->
-    <color name="bg_card">#FF26221E</color>          <!-- 卡片 -->
-    <color name="wood_light">#FFE8C88F</color>       <!-- 棋子木色(浅) -->
-    <color name="wood_mid">#FFD4A85C</color>         <!-- 木质主色 -->
-    <color name="wood_dim">#FF8A6F4A</color>         <!-- 木质暗色 -->
-    <color name="cinnabar">#FFE05A47</color>         <!-- 朱砂(主操作) -->
-    <color name="jade">#FF7FA88C</color>             <!-- 墨玉青(成功/对局) -->
-    <color name="text_primary">#FFF0E9DD</color>     <!-- 主文字(暖白) -->
-    <color name="text_secondary">#FFB5AA98</color>   <!-- 次要文字 -->
-    <color name="line_dark">#FF3A342C</color>        <!-- 分隔线 -->
-    <color name="overlay_bg">#F012100E</color>       <!-- 悬浮窗底 -->
-    <color name="overlay_stroke">#FF4A4238</color>
+    <!-- 棋室主题:蓝白配色(2026-10-12 用户指定色板)。全站共用,改这里即可整体换肤 -->
+    <color name="bg_deep">#FFF8FAFD</color>          <!-- 主底:蓝调白 -->
+    <color name="bg_panel">#FFFFFFFF</color>         <!-- 面板:纯白 -->
+    <color name="bg_card">#FFFFFFFF</color>          <!-- 卡片 -->
+    <color name="navy">#FF234B94</color>             <!-- 藏蓝(主操作/强调) -->
+    <color name="navy_light">#FF3A63B5</color>       <!-- 藏蓝亮态(按压/渐变) -->
+    <color name="success">#FF2E7D5B</color>          <!-- 成功/对局(绿,中性辅助) -->
+    <color name="text_primary">#FF1A1A1A</color>     <!-- 主文字 -->
+    <color name="text_secondary">#FF64748B</color>   <!-- 次要文字 -->
+    <color name="line_light">#FFCBD5E1</color>       <!-- 分隔线/边框 -->
+    <color name="overlay_bg">#D9F8FAFD</color>       <!-- 悬浮窗底:白 85% -->
+    <color name="overlay_stroke">#FFCBD5E1</color>
 </resources>
