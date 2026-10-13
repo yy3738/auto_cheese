@@ -1,5 +1,6 @@
 package com.cheese.assistant.recognize
 
+import com.cheese.assistant.util.AppLog
 import android.graphics.Bitmap
 import com.cheese.assistant.board.Piece
 import com.cheese.assistant.board.Position
@@ -58,12 +59,12 @@ class BoardWatcher(
     fun waitForPosition(timeoutMs: Long = STABLE_TIMEOUT_MS): Observed? {
         val bmp = ScreenCapture.captureStable(QUIET_MS, timeoutMs, ::sameRegion)
             ?: return null.also {
-                android.util.Log.e("BoardWatcher", "waitForPosition: captureStable null")
+                AppLog.e("BoardWatcher", "waitForPosition: captureStable null")
             }
         val result = BoardRecognizer.recognize(bmp, grid, templates)
         if (result.hasUnknown) {
-            android.util.Log.e("BoardWatcher", "waitForPosition: unknown ${result.unknown.count { it }}")
-            android.util.Log.d("BoardWatcher", result.matrixText.replace("\n", " | "))
+            AppLog.e("BoardWatcher", "waitForPosition: unknown ${result.unknown.count { it }}")
+            AppLog.d("BoardWatcher", result.matrixText.replace("\n", " | "))
             dumpFrame(bmp)
             return null
         }
@@ -79,28 +80,28 @@ class BoardWatcher(
             }
         }
         if (redKings != 1 || blackKings != 1 || pieces < MIN_PIECES) {
-            android.util.Log.e("BoardWatcher",
+            AppLog.e("BoardWatcher",
                 "waitForPosition: credibility fail redK=$redKings blackK=$blackKings pieces=$pieces")
             // 矩阵行=屏幕行(normalize 前),直接对照截图定位多出的假王
-            android.util.Log.d("BoardWatcher", result.matrixText.replace("\n", " | "))
+            AppLog.d("BoardWatcher", result.matrixText.replace("\n", " | "))
             // 王被光圈/将军特效遮蔽的帧(缺王)若相对上次可信局面只是
             // "消失",属遮蔽抖动:复用上次结果
             lastGood?.let { good ->
                 if (MoveCheck.isVanishOnly(good.pos, pos)) {
-                    android.util.Log.d("BoardWatcher", "king occluded, reuse last good")
+                    AppLog.d("BoardWatcher", "king occluded, reuse last good")
                     return good
                 }
                 // 棋局在走时与旧局面差异大,"纯消失"不成立——但王被特效
                 // 罩住判空时,场上恰好没有王而旧局面王格有王:把王放回去
                 // (王不可能离开棋盘)。修复失败才放弃
                 MoveCheck.restoreMissingKings(good.pos, pos)?.let { repaired ->
-                    android.util.Log.d("BoardWatcher", "king occluded, restored")
+                    AppLog.d("BoardWatcher", "king occluded, restored")
                     return Observed(repaired, good.userIsRed)
                 }
             }
             return null
         }
-        android.util.Log.d("BoardWatcher", "position OK pieces=$pieces")
+        AppLog.d("BoardWatcher", "position OK pieces=$pieces")
         return Observed(pos, MoveCheck.userIsRed(result.position)).also { lastGood = it }
     }
 
@@ -114,8 +115,8 @@ class BoardWatcher(
             if ((dir.listFiles()?.size ?: 0) >= DUMP_LIMIT) return
             val f = File(dir, "mp_${System.currentTimeMillis()}.png")
             f.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            android.util.Log.e("BoardWatcher", "dumpFrame: ${f.name}")
-        }.onFailure { android.util.Log.e("BoardWatcher", "dumpFrame failed", it) }
+            AppLog.e("BoardWatcher", "dumpFrame: ${f.name}")
+        }.onFailure { AppLog.e("BoardWatcher", "dumpFrame failed", it) }
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.cheese.assistant.service
 
+import com.cheese.assistant.util.AppLog
 import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
@@ -69,6 +70,8 @@ class AssistantService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        AppLog.start(this)
+        AppLog.i("AssistantService", "service created")
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         startForeground(NOTIFICATION_ID, buildNotification())
         isRunning = true
@@ -86,7 +89,7 @@ class AssistantService : Service() {
             serviceScope.launch {
                 runCatching {
                     withContext(Dispatchers.Main) { showOverlay(hint) }
-                }.onFailure { android.util.Log.e("AssistantService", "restore overlay failed", it) }
+                }.onFailure { AppLog.e("AssistantService", "restore overlay failed", it) }
             }
             return START_STICKY
         }
@@ -151,10 +154,10 @@ class AssistantService : Service() {
         if (pos != null && recorder.isUserToMove()) {
             val hash = Zobrist.of(pos.board, pos.redToMove)
             val hit = runCatching { AppDb.get(this@AssistantService).positionDao().get(hash) }
-                .onFailure { android.util.Log.e("AutoLoop", "kb query failed", it) }
+                .onFailure { AppLog.e("AutoLoop", "kb query failed", it) }
                 .getOrNull()
             if (hit != null && hit.depth >= KB_MIN_DEPTH) {
-                android.util.Log.d("AutoLoop", "kb hit depth=${hit.depth}")
+                AppLog.d("AutoLoop", "kb hit depth=${hit.depth}")
                 val score = hit.mateIn?.let { m -> "杀 $m" }
                     ?: String.format("%+.1f", hit.bestScoreCp / 100.0)
                 val threat = when (ThreatMarker.of(fen, hit.bestMove)) {
@@ -241,9 +244,12 @@ class AssistantService : Service() {
                 showOverlay("自动识别：等待棋盘画面...")
                 overlayView?.setUserSide(recorder.userIsRed)
             }
+            // 整个循环体兜底:任何一帧处理抛异常都会静默杀死协程,
+            // 表现正是"对局进行到一半悬浮窗永远不动"。
+            try {
             while (isActive) {
                 val observed = runCatching { watcher.waitForPosition() }
-                    .onFailure { android.util.Log.e("AutoLoop", "waitForPosition threw", it) }
+                    .onFailure { AppLog.e("AutoLoop", "waitForPosition threw", it) }
                     .getOrNull()
                 if (observed == null) {
                     // 连续 3 次失败才提示等待——单帧识别失败不该把候选从悬浮窗上刷掉
@@ -265,7 +271,7 @@ class AssistantService : Service() {
                 if (MoveCheck.hasImpossiblePawn(pos)) {
                     val repaired = last?.let { MoveCheck.repairImpossiblePawns(it, pos) }
                     if (repaired == null) {
-                        android.util.Log.d("AutoLoop", "impossible pawn, frame ignored")
+                        AppLog.d("AutoLoop", "impossible pawn, frame ignored")
                         if (++consecutiveFails >= 3) {
                             overlayInWait = true
                             withContext(Dispatchers.Main) {
@@ -277,11 +283,11 @@ class AssistantService : Service() {
                         continue
                     }
                     if (repaired.board.contentEquals(last!!.board)) {
-                        android.util.Log.d("AutoLoop", "impossible pawn repaired to anchor")
+                        AppLog.d("AutoLoop", "impossible pawn repaired to anchor")
                         delay(600)
                         continue
                     }
-                    android.util.Log.d("AutoLoop", "impossible pawn repaired, reprocess")
+                    AppLog.d("AutoLoop", "impossible pawn repaired, reprocess")
                     pos = repaired
                 }
                 consecutiveFails = 0
@@ -318,7 +324,7 @@ class AssistantService : Service() {
                     prev == null -> {
                         last = pos
                         recorder.start(pos, observed.userIsRed)
-                        android.util.Log.d("AutoLoop", "recorder start userIsRed=${observed.userIsRed}")
+                        AppLog.d("AutoLoop", "recorder start userIsRed=${observed.userIsRed}")
                         // 轮走方:初始局面红先;中途开启(局面已变)时 AI 多半已走,
                         // 假定轮到用户——走一步后按交替自动校正
                         redToMove = if (pos.board.contentEquals(Position.START.board))
@@ -331,13 +337,13 @@ class AssistantService : Service() {
                         when {
                             // 光圈遮蔽帧(被罩子判空):忽略,锚点保持完整版
                             MoveCheck.isVanishOnly(prev, pos) -> {
-                                android.util.Log.d("AutoLoop", "vanish-only: ${diffText(prev, pos)}")
+                                AppLog.d("AutoLoop", "vanish-only: ${diffText(prev, pos)}")
                                 delay(500)
                             }
                             // 遮蔽恢复帧(子重新可见):新局面才是完整版,修正锚点并重析;
                             // 无真实走子,不记谱、不翻转轮走方
                             MoveCheck.isAppearOnly(prev, pos) -> {
-                                android.util.Log.d("AutoLoop", "occlusion recovered")
+                                AppLog.d("AutoLoop", "occlusion recovered")
                                 last = pos
                                 postAnalysis(pos, redToMove)
                             }
@@ -347,7 +353,7 @@ class AssistantService : Service() {
                             // 价值跳变帧(点击棋子"抬起"使车被配成卒等)直接忽略:
                             // 锚点保持旧版,等棋子放下/走开后识别自动恢复
                             MoveCheck.isValueJumpRetag(prev, pos) -> {
-                                android.util.Log.d("AutoLoop",
+                                AppLog.d("AutoLoop",
                                     "value-jump retag ignored: ${diffText(prev, pos)}")
                                 delay(500)
                             }
@@ -355,23 +361,23 @@ class AssistantService : Service() {
                                 val pend = pendingRetag
                                 pendingRetag = null
                                 if (pend != null && pend.board.contentEquals(pos.board)) {
-                                    android.util.Log.d("AutoLoop", "retag confirmed: ${diffText(prev, pos)}")
+                                    AppLog.d("AutoLoop", "retag confirmed: ${diffText(prev, pos)}")
                                     last = pos
                                     postAnalysis(pos, redToMove)
                                 } else {
-                                    android.util.Log.d("AutoLoop", "retag pending: ${diffText(prev, pos)}")
+                                    AppLog.d("AutoLoop", "retag pending: ${diffText(prev, pos)}")
                                     pendingRetag = pos
                                     delay(500)
                                 }
                             }
                             MoveCheck.isPlausibleStep(prev, pos) -> {
-                                android.util.Log.d("AutoLoop", "step: ${diffText(prev, pos)}")
+                                AppLog.d("AutoLoop", "step: ${diffText(prev, pos)}")
                                 // 归因以实际移动的棋子颜色为准，不盲信轮走方：
                                 // 幽灵步错耗回合槽后，真实走子会被记到对方名下，
                                 // 整条 FEN 毒化。发现不一致时按实际颜色记账并重同步
                                 val actualRed = MoveCheck.stepMoverIsRed(prev, pos) ?: redToMove
                                 if (actualRed != redToMove) {
-                                    android.util.Log.w("AutoLoop",
+                                    AppLog.w("AutoLoop",
                                         "turn desync: expected ${if (redToMove) "red" else "black"} " +
                                             "to move, but mover is ${if (actualRed) "red" else "black"}; resyncing")
                                     redToMove = actualRed
@@ -385,10 +391,10 @@ class AssistantService : Service() {
                             // 出发点被行棋光圈罩住误配成假子(卒走后出发点亮圈配成士),
                             // 与落点出现同子凑成 2 处差异,严格步判不了——按走子记账
                             MoveCheck.isStepGhostOrigin(prev, pos) -> {
-                                android.util.Log.d("AutoLoop", "step(ghost): ${diffText(prev, pos)}")
+                                AppLog.d("AutoLoop", "step(ghost): ${diffText(prev, pos)}")
                                 val actualRed = MoveCheck.ghostMoverIsRed(prev, pos) ?: redToMove
                                 if (actualRed != redToMove) {
-                                    android.util.Log.w("AutoLoop",
+                                    AppLog.w("AutoLoop",
                                         "turn desync(ghost): resyncing to ${if (actualRed) "red" else "black"}")
                                     redToMove = actualRed
                                     syncSideButton()
@@ -403,7 +409,7 @@ class AssistantService : Service() {
                                 // 分解为先后两步记谱;分解失败才走 implausible
                                 val mid = MoveCheck.tryTwoSteps(prev, pos, redToMove)
                                 if (mid != null) {
-                                    android.util.Log.d("AutoLoop",
+                                    AppLog.d("AutoLoop",
                                         "two steps: ${diffText(prev, mid)} | ${diffText(mid, pos)}")
                                     // 第一步归因同样按棋子实际颜色校正(双向枚举后
                                     // firstIsRed 只是猜测)，第二步随之交替
@@ -412,7 +418,7 @@ class AssistantService : Service() {
                                         ?: redToMove
                                     val secondRed = MoveCheck.stepMoverIsRed(mid, pos) ?: !firstRed
                                     if (firstRed != redToMove) {
-                                        android.util.Log.w("AutoLoop",
+                                        AppLog.w("AutoLoop",
                                             "turn desync(two-steps): resyncing to ${if (firstRed) "red" else "black"} first")
                                         redToMove = firstRed
                                         syncSideButton()
@@ -425,7 +431,7 @@ class AssistantService : Service() {
                                 } else {
                                     // 动画中间帧或识别抖动；连续 3 次视为新对局/大变化，重置局面
                                     rejects++
-                                    android.util.Log.d("AutoLoop",
+                                    AppLog.d("AutoLoop",
                                         "implausible step rejects=$rejects diff=${diffText(prev, pos)}")
                                     if (rejects >= 3) {
                                         rejects = 0
@@ -445,6 +451,14 @@ class AssistantService : Service() {
                             }
                         }
                     }
+                }
+            }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                AppLog.e("AutoLoop", "loop crashed", t)
+                withContext(Dispatchers.Main) {
+                    overlayView?.setDegraded("识别循环异常：${t.message}，点「识别」重试")
                 }
             }
         }
@@ -550,6 +564,7 @@ class AssistantService : Service() {
     private var awaitingNextGame = false
 
     private fun onSealButton() {
+        AppLog.d("Seal", "click awaitingNextGame=$awaitingNextGame reviewActive=${reviewJob?.isActive}")
         if (awaitingNextGame) {
             awaitingNextGame = false
             // 清棋谱与悬浮窗状态机归位。cancelAndJoin 等进行中的分析退出,
@@ -557,6 +572,7 @@ class AssistantService : Service() {
             serviceScope.launch(Dispatchers.IO) {
                 autoJob?.cancelAndJoin()
                 recorder.reset()
+                AppLog.d("Seal", "next-game: state reset, restarting loop")
                 analyzedKeys.clear()
                 lastOverlayText = null
                 autoJob = null
@@ -587,6 +603,7 @@ class AssistantService : Service() {
             return
         }
         if (recorder.isEmpty) {
+            AppLog.d("SealReview", "no moves recorded, skip")
             serviceScope.launch {
                 withContext(Dispatchers.Main) { showOverlay("尚无对局记录") }
             }
@@ -607,17 +624,19 @@ class AssistantService : Service() {
             val userIsRed = recorder.userIsRed
             val db = AppDb.get(this@AssistantService)
             val gameId = runCatching { db.gameDao().insert(game) }
-                .onFailure { android.util.Log.e("SealReview", "insert game failed", it) }
+                .onFailure { AppLog.e("SealReview", "insert game failed", it) }
                 .getOrNull()
             val ctl = ensureController()
             if (ctl == null || gameId == null) {
+                AppLog.w("SealReview", "engine/db unavailable ctl=${ctl != null} gameId=$gameId")
                 withContext(Dispatchers.Main) { showOverlay("复盘失败:引擎不可用") }
                 return@launch
             }
+            val reviewStart = System.currentTimeMillis()
             val reviewer = com.cheese.assistant.review.GameReviewer(ctl)
             withContext(Dispatchers.Main) { showOverlay("复盘中:${moves.size}步...") }
             val reviews = runCatching { reviewer.review(moves, userIsRed) }
-                .onFailure { android.util.Log.e("SealReview", "review failed", it) }
+                .onFailure { AppLog.e("SealReview", "review failed", it) }
                 .getOrDefault(emptyList())
             runCatching { saveToKnowledge(db, reviews) }
             val mistakes = reviews.count { it.blunderLevel == 1 }
@@ -626,6 +645,9 @@ class AssistantService : Service() {
                 gameId, com.cheese.assistant.db.GameEntity.STATUS_DONE,
                 com.cheese.assistant.review.reviewsToJson(reviews), mistakes, majors)
             recorder.reset()
+            AppLog.i("SealReview",
+                "review done moves=${moves.size} mistakes=$mistakes majors=$majors " +
+                    "cost=${System.currentTimeMillis() - reviewStart}ms")
             withContext(Dispatchers.Main) {
                 showOverlay("复盘完成\n失误$mistakes 大漏着$majors\n(主界面「对局复盘」查看)")
                 overlayView?.showNextGameMode()

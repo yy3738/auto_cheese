@@ -36,6 +36,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        com.cheese.assistant.util.AppLog.start(applicationContext)
+        com.cheese.assistant.util.AppLog.i("Main", "activity created")
 
         boardView = findViewById(R.id.boardView)
         resultView = findViewById(R.id.resultView)

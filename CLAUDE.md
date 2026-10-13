@@ -38,6 +38,22 @@ D:/Android/Sdk/platform-tools/adb.exe -s 127.0.0.1:5555 install -r app/build/out
 完整复刻 App 端识别逻辑(24x24 BOX 缩放 + 中心圆掩码 NCC + 红黑硬门),
 用于对照 App 端识别结果与 PC 端是否一致。
 
+## App 内置日志(排障用)
+
+所有业务日志经 `util/AppLog` 同时进 logcat 与落盘 `files/logs/app-MMdd-HHmmss.log`
+(按会话命名,自动保留最近 4 份,崩溃堆栈同步落盘)。用户报告"卡死/异常"时拉日志:
+
+```bash
+# 列出日志文件
+adb -s 127.0.0.1:5555 shell "run-as com.cheese.assistant ls -t files/logs"
+# 拉最新一份(卡死那天的那份)
+adb -s 127.0.0.1:5555 exec-out run-as com.cheese.assistant \
+  cat files/logs/<文件名> > "E:\\learn\\auto_cheese\\crash.log"
+```
+
+新增业务日志一律用 `AppLog.d/i/w/e(tag, msg)`(需要堆栈传第三个参数),
+不要直接 android.util.Log——否则不落盘,事后无法排障。
+
 ## UI 坐标(1080x1920 模拟器)
 
 - 主界面悬浮窗按钮为右下角朱红大圆,中心 (885,1531);JJ 人机对战 (540,1490);

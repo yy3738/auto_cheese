@@ -1,5 +1,6 @@
 package com.cheese.assistant.engine
 
+import com.cheese.assistant.util.AppLog
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -83,7 +84,7 @@ class SearchController(
         // set_position 失败（仕象越界等非法局面）后引擎内部是空局面，
         // 继续同样触发缺王断言，必须直接放弃本次搜索
         if (!e.nativeSetPosition(fen, emptyArray())) {
-            android.util.Log.e("SearchCtl", "set_position failed fen=[$fen]")
+            AppLog.e("SearchCtl", "set_position failed fen=[$fen]")
             return@withContext SearchResult(emptyList(), "", 0, failed = true)
         }
         val byRank = HashMap<Int, Candidate>()
@@ -93,6 +94,7 @@ class SearchController(
         // 清掉上一局残留的输出（stop 后补发的行可能迟到），避免污染本次解析
         while (e.nativePollLine(0) != null) Unit
 
+        val startedAt = System.currentTimeMillis()
         e.nativeGo()
 
         val deadline = System.currentTimeMillis() + movetime + 3000L
@@ -122,6 +124,14 @@ class SearchController(
             }
         }
         e.nativeStop()
+
+        val cost = System.currentTimeMillis() - startedAt
+        when {
+            bestMove.isEmpty() ->
+                AppLog.w("SearchCtl", "no bestmove fen=[${fen.take(24)}…] cost=${cost}ms")
+            cost > movetime + 2000L ->
+                AppLog.w("SearchCtl", "slow search cost=${cost}ms movetime=$movetime best=${bestMove.take(8)}")
+        }
 
         SearchResult(
             candidates = byRank.values.sortedBy { it.rank },
