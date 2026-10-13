@@ -1,8 +1,15 @@
-# 中国象棋实战助手 — 项目须知
+# 弈枰(中国象棋实战悬浮助手) — 项目须知
 
-个人自用 Android App(悬浮窗形态,不上架)。develop 分支开发,中文 commit,
-尾行 `Co-Authored-By: Claude ... <noreply@anthropic.com>`。
-功能与排查状态见 [docs/overlay-auto-recognize-status.md](docs/overlay-auto-recognize-status.md)。
+个人自用 Android App(悬浮窗形态,不上架,原名「棋室」,2026-10 更名「弈枰」)。
+develop 分支开发,中文 commit,尾行 `Co-Authored-By: Claude ... <noreply@anthropic.com>`。
+
+## 文档地图(改动前先看对应文档)
+
+- [docs/usage.md](docs/usage.md) 使用文档(操作流程/排障)
+- [docs/features-and-roadmap.md](docs/features-and-roadmap.md) 功能清单与路线图
+- [docs/development-lessons.md](docs/development-lessons.md) 开发经验沉淀(新会话排障前必读)
+- [docs/overlay-auto-recognize-status.md](docs/overlay-auto-recognize-status.md) 识别排查史(归档)
+- [CONTEXT.md](CONTEXT.md) 领域语言;[docs/adr/](docs/adr/) 架构决策
 
 ## 构建环境
 
