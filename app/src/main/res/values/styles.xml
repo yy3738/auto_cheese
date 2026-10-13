@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 棋室主题:墨色底 + 木质面 + 朱砂强调 -->
+    <!-- 棋室主题:纸底墨字 + 朱红点睛 -->
     <style name="ChessBtn" parent="Widget.AppCompat.Button">
         <item name="android:background">@drawable/bg_btn</item>
-        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textColor">@color/ink</item>
         <item name="android:textSize">14sp</item>
         <item name="android:stateListAnimator">@null</item>
         <item name="android:minHeight">44dp</item>

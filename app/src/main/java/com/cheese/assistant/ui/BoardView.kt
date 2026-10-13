@@ -29,13 +29,13 @@ class BoardView @JvmOverloads constructor(
 
     var onPositionChanged: (() -> Unit)? = null
 
-    // 蓝白主题:浅灰蓝线框,红子红字、黑子黑字(白底),藏蓝选中高亮
-    private val linePaint = Paint().apply { color = 0xFFCBD5E1.toInt(); strokeWidth = 3f }
+    // 墨纸主题:暖墨线框,红子红字、黑子黑字(纸底),朱红选中高亮
+    private val linePaint = Paint().apply { color = 0xFF5A4E38.toInt(); strokeWidth = 2.5f }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER; textSize = 42f; isFakeBoldText = true
     }
     private val selPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0x33234B94; style = Paint.Style.FILL
+        color = 0x2EB03A3A; style = Paint.Style.FILL
     }
 
     override fun onDraw(canvas: Canvas) {

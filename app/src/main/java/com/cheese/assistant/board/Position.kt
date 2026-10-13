@@ -66,20 +66,25 @@ data class Position(
             return Position(board, parts.getOrNull(1) != "b")
         }
 
-        val START = Position(Array(90) { null }, true).apply {
+        // START 必须是取值器:棋盘数组可变,若暴露单例,BoardView 手摆几步后
+        // START 即被污染,"摆开局"再也回不到初始局面(2026-10-13 实测 bug)
+        private val START_PIECES: Array<Piece?> = arrayOfNulls<Piece>(90).apply {
             val back = listOf(
                 Piece.B_ROOK, Piece.B_KNIGHT, Piece.B_BISHOP, Piece.B_ADVISOR, Piece.B_KING,
                 Piece.B_ADVISOR, Piece.B_BISHOP, Piece.B_KNIGHT, Piece.B_ROOK)
-            back.forEachIndexed { col, p -> board[col] = p }
-            board[2 * 9 + 1] = Piece.B_CANNON; board[2 * 9 + 7] = Piece.B_CANNON
-            for (col in 0..8 step 2) board[3 * 9 + col] = Piece.B_PAWN
+            back.forEachIndexed { col, p -> this[col] = p }
+            this[2 * 9 + 1] = Piece.B_CANNON; this[2 * 9 + 7] = Piece.B_CANNON
+            for (col in 0..8 step 2) this[3 * 9 + col] = Piece.B_PAWN
             val redBack = listOf(
                 Piece.R_ROOK, Piece.R_KNIGHT, Piece.R_BISHOP, Piece.R_ADVISOR, Piece.R_KING,
                 Piece.R_ADVISOR, Piece.R_BISHOP, Piece.R_KNIGHT, Piece.R_ROOK)
-            redBack.forEachIndexed { col, p -> board[9 * 9 + col] = p }
-            board[7 * 9 + 1] = Piece.R_CANNON; board[7 * 9 + 7] = Piece.R_CANNON
-            for (col in 0..8 step 2) board[6 * 9 + col] = Piece.R_PAWN
+            redBack.forEachIndexed { col, p -> this[9 * 9 + col] = p }
+            this[7 * 9 + 1] = Piece.R_CANNON; this[7 * 9 + 7] = Piece.R_CANNON
+            for (col in 0..8 step 2) this[6 * 9 + col] = Piece.R_PAWN
         }
+
+        val START: Position
+            get() = Position(START_PIECES.copyOf(), true)
     }
 }
 

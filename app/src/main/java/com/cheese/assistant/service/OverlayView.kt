@@ -38,7 +38,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
     // ---- 展开态控件 ----
 
     private val titleView = TextView(context).apply {
-        text = "棋室"
+        text = "弈枰"
         setTextColor(0xFFFFFFFF.toInt())
         setTypeface(Typeface.SERIF, Typeface.BOLD)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
@@ -121,7 +121,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
 
     /** 收起态:单个小圆点 */
     private val collapsedDot: TextView = TextView(context).apply {
-        text = "棋"
+        text = "枰"
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
         gravity = Gravity.CENTER
         setPadding(dp(6), dp(6), dp(6), dp(6))

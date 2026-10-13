@@ -1,25 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 棋室主题:蓝白配色(2026-10-12 用户指定色板)。全站共用,改这里即可整体换肤 -->
-    <color name="bg_deep">#FFF8FAFD</color>          <!-- 主底:蓝调白 -->
-    <color name="bg_panel">#FFFFFFFF</color>         <!-- 面板:纯白 -->
-    <color name="bg_card">#FFFFFFFF</color>          <!-- 卡片 -->
-    <color name="navy">#FF234B94</color>             <!-- 藏蓝(主操作/强调) -->
-    <color name="navy_light">#FF3A63B5</color>       <!-- 藏蓝亮态(按压/渐变) -->
-    <color name="success">#FF2E7D5B</color>          <!-- 成功/对局(绿,中性辅助) -->
-    <color name="text_primary">#FF1A1A1A</color>     <!-- 主文字 -->
-    <color name="text_secondary">#FF64748B</color>   <!-- 次要文字 -->
-    <color name="line_light">#FFCBD5E1</color>       <!-- 分隔线/边框 -->
-    <color name="overlay_bg">#D9F8FAFD</color>       <!-- 悬浮窗底:白 85% -->
-    <color name="overlay_stroke">#FFCBD5E1</color>
-
-    <!-- 主界面版式扩展 -->
-    <color name="bg_grad_top">#FFEDF2FA</color>      <!-- 页面顶部:淡蓝晕 -->
-    <color name="bg_grad_bottom">#FFFDFEFF</color>   <!-- 页面底部:近白 -->
-    <color name="tint_navy_soft">#FFF2F6FB</color>   <!-- 藏蓝 4% 淡染(FEN/结果底) -->
-    <color name="divider_soft">#66CBD5E1</color>     <!-- 分隔线 40% -->
-    <color name="navy_ghost">#80234B94</color>       <!-- 藏蓝描边 50%(幽灵卡) -->
-    <color name="board_frame">#59234B94</color>      <!-- 棋盘框:藏蓝 35% -->
-    <color name="vermillion">#FFD64545</color>       <!-- 朱红(印章/点睛,与悬浮窗同源) -->
+    <!-- 棋室主题·墨纸编辑部(2026-10-13 用户从4方案中选定B):纸底墨字朱红一点。
+         全站共用,改这里即可整体换肤 -->
+    <color name="paper">#FFF5F1E8</color>            <!-- 页面底:米白纸 -->
+    <color name="paper_board">#FFEDE4CC</color>      <!-- 棋盘底:旧纸 -->
+    <color name="ink">#FF1A1A1A</color>              <!-- 墨字 -->
+    <color name="ink_soft">#FF6B6455</color>         <!-- 淡墨(次要文字) -->
+    <color name="line_paper">#FFD8D2C2</color>       <!-- 纸面细线 -->
+    <color name="accent_red">#FFC0392B</color>       <!-- 朱红点睛 -->
+    <color name="vermillion">#FFD64545</color>       <!-- 朱红亮态(圆钮渐变) -->
     <color name="vermillion_deep">#FFB03A3A</color>  <!-- 朱红深态 -->
+    <color name="res_text">#FF4A4234</color>         <!-- 结果卡墨字 -->
+    <color name="paper_res">#FFF0EADA</color>        <!-- 结果卡底 -->
 </resources>
