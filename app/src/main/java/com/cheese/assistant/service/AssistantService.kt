@@ -497,6 +497,13 @@ class AssistantService : Service() {
         analyzedKeys.addLast(key)
     }
 
+    // 分析失败的冷却:同一非法局面(误配色产生的超编 FEN,实测对局中
+    // 红车被配成黑车 →"黑3车红0车")失败不进 analyzedKeys 是为保重试,
+    // 但悬浮窗上局面没变时每个识别周期都会重烧 3.x 秒引擎。冷却期内
+    // 直接跳过引擎,悬浮窗保留最后一次失败提示,局面变了自然重试
+    private var lastFailFen: String? = null
+    private var failCooldownUntil = 0L
+
     private suspend fun postAnalysis(pos: Position, redToMove: Boolean) {
         val fen = Position(pos.board, redToMove).toFen()
         val userTurn = redToMove == recorder.userIsRed
@@ -506,6 +513,11 @@ class AssistantService : Service() {
         val stamp = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
             .format(java.util.Date())
         if (key in analyzedKeys) return
+        // 失败冷却:同一 FEN 15 秒内不重复喂引擎(防每帧 3.8s 死循环)
+        if (fen == lastFailFen && System.currentTimeMillis() < failCooldownUntil) {
+            AppLog.d("AutoLoop", "fail cooldown, skip search ${fen.take(24)}")
+            return
+        }
         if (!userTurn) {
             // 实战辅助只给用户自己的走法;对手回合不占引擎
             lastOverlayText = "对手回合 · 等你落子 (${pieces}子 $stamp)"
@@ -524,13 +536,16 @@ class AssistantService : Service() {
         val first = candidates.firstOrNull()?.line ?: ""
         if (first.contains("局面异常") || first.contains("搜索失败")) {
             // 失败结果不缓存:去重 key 会挡住重试,悬浮窗从此卡死旧文本。
-            // 不记 analyzedKeys、不写 lastOverlayText,下一帧自动重新分析
+            // 不记 analyzedKeys、不写 lastOverlayText,冷却 15s 后自动重试
+            lastFailFen = fen
+            failCooldownUntil = System.currentTimeMillis() + 15000L
             withContext(Dispatchers.Main) {
                 showOverlay("${side}回合 $first")
                 overlayView?.setUserTurn(false)
             }
             return
         }
+        lastFailFen = null
         markAnalyzed(key)
         lastOverlayText = "${side}回合 (${pieces}子 $stamp)"
         withContext(Dispatchers.Main) {

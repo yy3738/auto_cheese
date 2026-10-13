@@ -115,12 +115,27 @@ class SearchController(
             }
         }
         if (bestMove.isEmpty()) {
-            // 时限到了还没等来 bestmove：stop 后引擎必然补发 bestmove，再等 2s
+            // 时限到了还没等来 bestmove：stop 后引擎必然补发，再等 3s。
+            // 期间 info 行照常入候选,bestmove 到达必须赋值——旧版只
+            // break 不赋值,慢机(模拟器满载)上 bestmove 全落在宽限期,
+            // 结果永远空,日志永远"no bestmove"
             e.nativeStop()
-            val bmDeadline = System.currentTimeMillis() + 2000L
+            val bmDeadline = System.currentTimeMillis() + 3000L
             while (System.currentTimeMillis() < bmDeadline) {
                 val line = e.nativePollLine(100) ?: continue
-                if (UciParser.parse(line) is UciLine.BestMove) break
+                when (val parsed = UciParser.parse(line)) {
+                    is UciLine.Info -> {
+                        val c = parsed.candidate
+                        val old = byRank[c.rank]
+                        if (old == null || c.depth >= old.depth) byRank[c.rank] = c
+                        maxDepth = maxOf(maxDepth, c.depth)
+                    }
+                    is UciLine.BestMove -> {
+                        bestMove = parsed.move
+                        break
+                    }
+                    else -> Unit
+                }
             }
         }
         e.nativeStop()

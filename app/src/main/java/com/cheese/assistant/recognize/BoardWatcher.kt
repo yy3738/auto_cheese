@@ -101,6 +101,20 @@ class BoardWatcher(
             }
             return null
         }
+        // 每色棋子上限:颜色误配(实测红车→黑车)或结算弹窗半遮棋盘的
+        // 垃圾帧会产生"黑方3车/红方0车"类非法局面,喂给引擎就是
+        // set_position failed,而失败不缓存 → 同一垃圾 FEN 每帧重烧
+        // 3.8s 引擎,整机被拖慢。超上限帧一律不可信,在源头挡住
+        for (p in Piece.entries) {
+            val cap = if (p == Piece.R_PAWN || p == Piece.B_PAWN) 5 else 1
+            val n = pos.board.count { it == p }
+            if (n > cap) {
+                AppLog.e("BoardWatcher", "waitForPosition: piece cap $p=$n")
+                AppLog.d("BoardWatcher", result.matrixText.replace("\n", " | "))
+                dumpFrame(bmp)
+                return null
+            }
+        }
         AppLog.d("BoardWatcher", "position OK pieces=$pieces")
         return Observed(pos, MoveCheck.userIsRed(result.position)).also { lastGood = it }
     }
