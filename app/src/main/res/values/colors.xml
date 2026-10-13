@@ -20,4 +20,6 @@
     <color name="divider_soft">#66CBD5E1</color>     <!-- 分隔线 40% -->
     <color name="navy_ghost">#80234B94</color>       <!-- 藏蓝描边 50%(幽灵卡) -->
     <color name="board_frame">#59234B94</color>      <!-- 棋盘框:藏蓝 35% -->
+    <color name="vermillion">#FFD64545</color>       <!-- 朱红(印章/点睛,与悬浮窗同源) -->
+    <color name="vermillion_deep">#FFB03A3A</color>  <!-- 朱红深态 -->
 </resources>

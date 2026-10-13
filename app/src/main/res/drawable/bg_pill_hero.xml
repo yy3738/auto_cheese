@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 药丸(英雄区内):半透明白,配白字 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <corners android:radius="8dp" />
-    <solid android:color="@color/navy" />
+    <corners android:radius="18dp" />
+    <solid android:color="#26FFFFFF" />
 </shape>

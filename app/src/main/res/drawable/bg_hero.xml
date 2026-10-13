@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 英雄区:藏蓝渐变,仅底两角圆(与悬浮窗标题栏同语言) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="@color/navy_light"
+        android:endColor="@color/navy" />
+    <corners
+        android:bottomLeftRadius="24dp"
+        android:bottomRightRadius="24dp" />
+</shape>

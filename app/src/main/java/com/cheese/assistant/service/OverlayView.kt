@@ -139,11 +139,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
     init {
         orientation = VERTICAL
         clipToOutline = true
-        background = GradientDrawable().apply {
-            setColor(0xF2F8FAFD.toInt())
-            cornerRadius = dp(16).toFloat()
-            setStroke(dp(1), colorLine)
-        }
+        background = cardShape()
 
         handleBar = LinearLayout(context).apply {
             orientation = HORIZONTAL
@@ -202,7 +198,16 @@ class OverlayView(context: Context) : LinearLayout(context) {
         suggestionContainer.visibility = if (expanded) VISIBLE else GONE
         degradedRow.visibility = if (expanded && degraded) VISIBLE else GONE
         collapsedDot.visibility = if (expanded) GONE else VISIBLE
+        // 收起时根卡片背景必须隐藏:窗口缩到 40dp,近白底+描边会在圆点
+        // 周围露出一圈白框;展开时恢复卡片
+        background = if (expanded) cardShape() else null
         applyDotStyle()
+    }
+
+    private fun cardShape(): GradientDrawable = GradientDrawable().apply {
+        setColor(0xF2F8FAFD.toInt())
+        cornerRadius = dp(16).toFloat()
+        setStroke(dp(1), colorLine)
     }
 
     /** 收起时的窗口尺寸由服务层读取(切换 layout 尺寸) */

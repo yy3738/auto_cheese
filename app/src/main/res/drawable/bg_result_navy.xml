@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 结果卡:淡蓝染底 + 左侧藏蓝墨条 -->
+<!-- 结果卡:藏蓝实底 + 左朱红墨条(收底书挡) -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
-            <corners android:radius="12dp" />
-            <solid android:color="@color/tint_navy_soft" />
-            <stroke android:width="1dp" android:color="@color/divider_soft" />
+            <corners android:radius="14dp" />
+            <solid android:color="@color/navy" />
         </shape>
     </item>
     <item
@@ -13,7 +12,7 @@
         android:gravity="start">
         <shape android:shape="rectangle">
             <corners android:radius="2dp" />
-            <solid android:color="@color/navy" />
+            <solid android:color="@color/vermillion" />
         </shape>
     </item>
 </layer-list>
