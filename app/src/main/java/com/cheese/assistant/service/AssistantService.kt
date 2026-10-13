@@ -257,7 +257,7 @@ class AssistantService : Service() {
                         overlayInWait = true
                         withContext(Dispatchers.Main) {
                             showOverlay("等待稳定棋盘画面...")
-                            overlayView?.setDegraded("识别不稳定，正在等待画面…")
+                            overlayView?.setDegraded(degradedHint(consecutiveFails))
                         }
                     }
                     continue
@@ -276,7 +276,7 @@ class AssistantService : Service() {
                             overlayInWait = true
                             withContext(Dispatchers.Main) {
                                 showOverlay("等待稳定棋盘画面...")
-                                overlayView?.setDegraded("识别不稳定，正在等待画面…")
+                                overlayView?.setDegraded(degradedHint(consecutiveFails))
                             }
                         }
                         delay(600)
@@ -463,6 +463,17 @@ class AssistantService : Service() {
             }
         }
     }
+
+    /**
+     * 识别连续失败时的降级提示,按失败次数分级:
+     * 3 次起=等待(动画/短暂遮挡);12 次起≈18 秒仍失败,大概率不是
+     * 暂时抖动而是棋盘已不在画面里——实测对局结束停在 JJ「局终」结算页,
+     * 深色面板盖住棋盘,每帧只剩上排几个子(redK=0),原文案「正在等待」
+     * 让用户无限干等。给出明确的行动指引,点「再来一局」回棋盘自动恢复。
+     */
+    private fun degradedHint(fails: Int): String =
+        if (fails >= 12) "画面疑似对局已结束或被弹窗遮挡——若已结束点「结」复盘,点「再来一局」回棋盘自动恢复"
+        else "识别不稳定，正在等待画面…"
 
     /** 识别矩阵 row0 = 屏幕最上排;日志用 (屏幕行,列) 直读 */
     private fun diffText(a: Position, b: Position): String {
