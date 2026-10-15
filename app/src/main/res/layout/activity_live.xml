@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  对局实况页:核对识别的入口。
+  棋盘按「走过的招法」回放摆盘(识别是辅助——识别若中途错乱,棋谱忠实
+  记录照样展示),「识别对照」行红字提示不一致。棋盘可点选移动棋子手动
+  纠正,改完自动按纠正局面重算推荐(REANALYZE,不影响识别循环)。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/paper"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <Button
+            android:id="@+id/btnBack"
+            style="@style/ChessBtn"
+            android:background="@null"
+            android:backgroundTint="@null"
+            android:textColor="@color/ink_soft"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:paddingStart="0dp"
+            android:paddingEnd="10dp"
+            android:textSize="13sp"
+            android:text="← 返回主界面" />
+
+        <TextView
+            android:id="@+id/tvStamp"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:textSize="9sp"
+            android:letterSpacing="0.15"
+            android:textColor="@color/ink_soft"
+            android:text="对局实况" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="2dp"
+        android:layout_marginTop="6dp"
+        android:background="@color/ink" />
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="2dp"
+        android:background="@color/line_paper" />
+
+    <!-- 识别对照:一致=灰,不一致=朱红提醒(以棋谱为准) -->
+    <TextView
+        android:id="@+id/tvMatch"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textSize="11sp"
+        android:textColor="@color/ink_soft"
+        android:text="识别对照：等待识别..." />
+
+    <!-- 棋盘:棋谱回放 + 手动纠正 -->
+    <FrameLayout
+        android:id="@+id/boardFrame"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_board_paper"
+        android:padding="4dp">
+
+        <com.cheese.assistant.ui.BoardView
+            android:id="@+id/boardView"
+            android:layout_width="match_parent"
+            android:layout_height="320dp" />
+    </FrameLayout>
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textSize="9sp"
+        android:textColor="@color/ink_soft"
+        android:text="点选棋子再点目标格可移动纠正；纠正后自动按新局面重算推荐(只改本次显示,不改棋谱)" />
+
+    <Button
+        android:id="@+id/btnUndoStep"
+        style="@style/ChessBtn"
+        android:background="@drawable/bg_row_ink"
+        android:backgroundTint="@null"
+        android:textColor="@color/accent_red"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:layout_marginTop="6dp"
+        android:gravity="start|center_vertical"
+        android:paddingStart="2dp"
+        android:textSize="12sp"
+        android:text="✦ 撤回最后一步识别(棋谱错时点此)" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="推荐招法"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="@color/ink"
+                android:letterSpacing="0.1" />
+
+            <TextView
+                android:id="@+id/tvCandidates"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_result_paper"
+                android:padding="10dp"
+                android:textSize="12sp"
+                android:lineSpacingExtra="3dp"
+                android:fontFamily="monospace"
+                android:textColor="@color/res_text"
+                android:text="等待识别..." />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="棋谱"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:textColor="@color/ink"
+                android:letterSpacing="0.1" />
+
+            <TextView
+                android:id="@+id/tvMoves"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="10dp"
+                android:textSize="12sp"
+                android:lineSpacingExtra="4dp"
+                android:textColor="@color/ink"
+                android:text="(无记录)" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

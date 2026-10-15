@@ -68,6 +68,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnAnalyze.setOnClickListener { analyze() }
+        findViewById<Button>(R.id.btnLive).setOnClickListener {
+            startActivity(Intent(this, com.cheese.assistant.ui.LiveGameActivity::class.java))
+        }
         findViewById<Button>(R.id.btnOverlay).setOnClickListener { toggleOverlay() }
         findViewById<Button>(R.id.btnCapture).setOnClickListener { testCapture() }
         findViewById<Button>(R.id.btnRecognize).setOnClickListener { testRecognize() }

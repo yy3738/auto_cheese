@@ -18,6 +18,8 @@ class BoardWatcher(
     private val templates: TemplateStore,
     /** 非空时识别失败的原始 MediaProjection 帧落盘此目录（限 DUMP_LIMIT 张），供 PC 端对比诊断 */
     private val dumpDir: File? = null,
+    /** 会话开局即遇王误读(lastGood 未建立)时的王格锚点来源——棋谱回放局面 */
+    private val kingFallback: (() -> Position?)? = null,
 ) {
 
     companion object {
@@ -85,18 +87,29 @@ class BoardWatcher(
             // 矩阵行=屏幕行(normalize 前),直接对照截图定位多出的假王
             AppLog.d("BoardWatcher", result.matrixText.replace("\n", " | "))
             // 王被光圈/将军特效遮蔽的帧(缺王)若相对上次可信局面只是
-            // "消失",属遮蔽抖动:复用上次结果
-            lastGood?.let { good ->
-                if (MoveCheck.isVanishOnly(good.pos, pos)) {
-                    AppLog.d("BoardWatcher", "king occluded, reuse last good")
-                    return good
-                }
-                // 棋局在走时与旧局面差异大,"纯消失"不成立——但王被特效
-                // 罩住判空时,场上恰好没有王而旧局面王格有王:把王放回去
-                // (王不可能离开棋盘)。修复失败才放弃
-                MoveCheck.restoreMissingKings(good.pos, pos)?.let { repaired ->
-                    AppLog.d("BoardWatcher", "king occluded, restored")
-                    return Observed(repaired, good.userIsRed)
+            // "消失",属遮蔽抖动:复用上次结果。会话从未成功过(lastGood
+            // 未建立)时,用棋谱回放局面兜底——否则开局王误读会死锁整局
+            val anchorForKing = lastGood?.pos ?: kingFallback?.invoke()
+            AppLog.d("BoardWatcher",
+                "king fail: anchor=${anchorForKing != null} lastGood=${lastGood != null}")
+            anchorForKing?.let { a ->
+                MoveCheck.restoreMissingKings(a, pos)?.let { repaired ->
+                    // 门禁:恢复结果与锚点差异必须很小(王格误读+至多一两格)。
+                    // 无门禁时大厅/结算页的任意画面被强塞双王,垃圾局面变成
+                    // "position OK"挤占识别循环,真实对局的推荐反而被顶掉
+                    // (2026-10-14 回归教训:王恢复必须带差异门禁)
+                    var anchorDiffs = 0
+                    for (i in 0 until 90) if (a.board[i] != repaired.board[i]) anchorDiffs++
+                    if (anchorDiffs > 3) {
+                        AppLog.w("BoardWatcher",
+                            "king restore rejected: anchor diff=$anchorDiffs (非棋盘画面)")
+                        return null
+                    }
+                    AppLog.d("BoardWatcher", "king occluded, restored" +
+                        (if (lastGood == null) " (bootstrap)" else ""))
+                    val red = if (lastGood != null) lastGood!!.userIsRed
+                              else MoveCheck.userIsRed(a)
+                    return Observed(repaired, red).also { lastGood = it }
                 }
             }
             return null
@@ -106,7 +119,11 @@ class BoardWatcher(
         // set_position failed,而失败不缓存 → 同一垃圾 FEN 每帧重烧
         // 3.8s 引擎,整机被拖慢。超上限帧一律不可信,在源头挡住
         for (p in Piece.entries) {
-            val cap = if (p == Piece.R_PAWN || p == Piece.B_PAWN) 5 else 1
+            val cap = when (p) {
+                Piece.R_KING, Piece.B_KING -> 1
+                Piece.R_PAWN, Piece.B_PAWN -> 5
+                else -> 2
+            }
             val n = pos.board.count { it == p }
             if (n > cap) {
                 AppLog.e("BoardWatcher", "waitForPosition: piece cap $p=$n")
@@ -368,11 +385,12 @@ object MoveCheck {
     }
 
     /**
-     * 用锚点修复缺失的王:将/帅被将军特效或行棋光圈持续罩住时判空或
-     * 被误读成同色其他子(实测帥+白光圈→红炮),每帧都被"双王俱在"校验
-     * 拒绝,识别完全瘫痪。修复:场上缺红王时看锚点红王格——为空或被
-     * 红子占据(=王被误读)都放回红王;被黑子占据说明王真被吃(对局已
-     * 结束),拒绝修复返回 null。
+     * 用锚点修复缺失的王:将/帅被将军特效或行棋光圈持续罩住时判空或被
+     * 误读成其他子(实测帥+白光圈→红炮,又见红帥→黑炮的异色误读),每帧
+     * 都被"双王俱在"校验拒绝,识别完全瘫痪。修复:锚点王格无条件放回王
+     * 并清除该格误读子——"王真被吃(异色子占王格)则拒绝"的旧规则会卡死
+     * 识别(王不可能在对局中被吃:JJ 王被将死即入结算页,识别已无意义);
+     * 误放回的代价只是锚点回到上一可信局面,走子校验会继续把关。
      */
     fun restoreMissingKings(anchor: Position, pos: Position): Position? {
         val hasRedKing = pos.board.any { it == Piece.R_KING }
@@ -382,15 +400,11 @@ object MoveCheck {
         if (!hasRedKing) {
             val i = anchor.board.indexOfFirst { it == Piece.R_KING }
             if (i < 0) return null
-            val cur = board[i]
-            if (cur != null && !cur.isRed) return null
             board[i] = Piece.R_KING
         }
         if (!hasBlackKing) {
             val i = anchor.board.indexOfFirst { it == Piece.B_KING }
             if (i < 0) return null
-            val cur = board[i]
-            if (cur != null && cur.isRed) return null
             board[i] = Piece.B_KING
         }
         return Position(board, pos.redToMove)

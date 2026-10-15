@@ -2,18 +2,20 @@ package com.cheese.assistant.board
 
 /**
  * 打吃/将军判定：模拟走推荐着法后，扫描对方棋子是否处于我方攻击范围。
- * 定义（用户确认）：能吃到对方任意子 = 打吃；吃王 = 将军（优先显示）。
+ * 定义（用户确认,2026-10-13 细化分级）：能吃到对方任意子 = 打吃；
+ * 吃王 = 将军（优先显示）。走完立即发生用深色，走完后下一手才发生的
+ * 用淡色（当前吃=深蓝/打吃=淡蓝/当前将=朱红/蹲杀=淡朱红）。
  */
 object ThreatMarker {
 
-    /** 着法威胁级别 */
-    enum class Level { NONE, CAPTURE, CHECK }
+    /** 着法威胁级别：优先级 CHECK > CAPTURE > THREAT_CHECK > THREAT_CAPTURE > NONE */
+    enum class Level { NONE, THREAT_CAPTURE, CAPTURE, THREAT_CHECK, CHECK }
 
     /**
      * 模拟走 move（ICCS 如 "h2e2"）后判定威胁。
      * 威胁只归属刚走的那颗子（否则开局炮本来就隔山吃马，每步都成打吃）；
-     * 将军按全盘检测（含发现式将军）。
-     * 返回 NONE / CAPTURE（该子吃掉或下一步可吃子）/ CHECK（将军）。
+     * 将军按全盘检测（含发现式将军）；蹲杀检测按走后局面任一己子
+     * 存在一手叫将（含吃子开线，如炮打掉炮架露出将）。
      */
     fun of(fen: String, move: String): Level {
         if (move.length < 4) return Level.NONE
@@ -28,16 +30,43 @@ object ThreatMarker {
         board[fromIdx] = null
         board[toIdx] = mover
         // 直接吃王 = 将军（吃掉后棋盘无王，isKingAttacked 检测不到）
-        if (captured == (if (mover.isRed) Piece.B_KING else Piece.R_KING)) return Level.CHECK
+        val enemyKing = if (mover.isRed) Piece.B_KING else Piece.R_KING
+        if (captured == enemyKing) return Level.CHECK
         val after = Position(board, !pos.redToMove)
-        // 再判走后将军（含发现式）
+        // 再判走后将军（含发现式）= 当前将
         if (isKingAttacked(after, mover.isRed)) return Level.CHECK
+        // 当前吃：这步直接吃掉对方子
+        val justCaptured = captured != null && captured.isRed != mover.isRed
+        if (justCaptured) return Level.CAPTURE
+        // 打吃：刚走的这颗子下一步能吃到对方子
         val threatensCapture = pseudoMoves(after, toIdx).any { j ->
             val target = after.board[j]
             target != null && target.isRed != mover.isRed
         }
-        val justCaptured = captured != null && captured.isRed != mover.isRed
-        return if (justCaptured || threatensCapture) Level.CAPTURE else Level.NONE
+        if (threatensCapture) return Level.THREAT_CAPTURE
+        // 蹲杀：走后任一己子存在一手叫将
+        if (canCheckNext(after, mover.isRed)) return Level.THREAT_CHECK
+        return Level.NONE
+    }
+
+    /**
+     * 蹲杀判定：byRed 方任一子走一步（到空位或吃子位）后立刻将军。
+     * 每次扫描 ~30 子 × 各自伪合法步,代价可接受(仅推荐列表判定时调用)。
+     */
+    private fun canCheckNext(after: Position, byRed: Boolean): Boolean {
+        val king = if (byRed) Piece.B_KING else Piece.R_KING
+        if (after.board.indexOfFirst { it == king } < 0) return false
+        for (i in 0 until 90) {
+            val p = after.board[i] ?: continue
+            if (p.isRed != byRed) continue
+            for (t in pseudoMoves(after, i)) {
+                val b2 = after.board.copyOf()
+                b2[i] = null
+                b2[t] = p
+                if (isKingAttacked(Position(b2, after.redToMove), byRed)) return true
+            }
+        }
+        return false
     }
 
     private fun squareIndex(sq: String): Int? {

@@ -40,6 +40,10 @@
             android:name=".review.ReviewActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".ui.LiveGameActivity"
+            android:exported="false" />
+
         <service
             android:name=".service.AssistantService"
             android:exported="false"

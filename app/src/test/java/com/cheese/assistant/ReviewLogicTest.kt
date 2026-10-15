@@ -291,11 +291,14 @@ class OcclusionTest {
     }
 
     @Test
-    fun `王格被敌子占据时拒绝修复`() {
-        // 当前帧王格出现敌方棋子 → 王真被吃了(对局结束),修复无意义
+    fun `王格被敌子占据也放回王`() {
+        // 2026-10-14 实测:红帅被白光圈+黑衣干扰读成黑炮(异色),旧规则
+        // 按"异色子占王格=王真被吃"拒绝修复,识别整局瘫痪。王在对局中
+        // 不可能被吃(JJ 将死即入结算页),误读必须放回,兜底不让位
         val anchor = Position(board(4 to Piece.R_KING, 85 to Piece.B_KING), true)
-        val bad = Position(board(4 to Piece.B_KNIGHT, 85 to Piece.B_KING), true)
-        assertNull(MoveCheck.restoreMissingKings(anchor, bad))
+        val bad = Position(board(4 to Piece.B_CANNON, 85 to Piece.B_KING), true)
+        val fixed = MoveCheck.restoreMissingKings(anchor, bad)
+        assertEquals(Piece.R_KING, fixed?.board?.get(4))
     }
 
     @Test

@@ -47,10 +47,12 @@ class ReviewActivity : Activity() {
                 setOnClickListener { finish() }
             })
             addView(TextView(this@ReviewActivity).apply {
-                text = "← 返回   ·   点行展开明细"
+                text = "← 点击返回   ·   点对局行展开明细"
                 textSize = 12f
-                setTextColor(0xFF64748B.toInt())
+                setTextColor(0xFF234B94.toInt())
                 setPadding(dp(2), 0, dp(2), dp(10))
+                // 静态文字曾被当成装饰——点「返回」没反应的根因
+                setOnClickListener { finish() }
             })
         }
         root.addView(ScrollView(this).apply { addView(container) })

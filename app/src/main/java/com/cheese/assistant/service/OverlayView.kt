@@ -27,7 +27,9 @@ class OverlayView(context: Context) : LinearLayout(context) {
     private val colorTextSecondary = 0xFF64748B.toInt()
     private val colorNavy = 0xFF234B94.toInt()
     private val colorNavyLight = 0xFF3A63B5.toInt()
+    private val colorNavySoft = 0xFFB9C6DE.toInt()   // 淡蓝:打吃徽章
     private val colorVermillion = 0xFFD64545.toInt()
+    private val colorVermillionSoft = 0xFFF0B3AE.toInt() // 淡朱红:蹲杀徽章
     private val colorLine = 0xFFCBD5E1.toInt()
     private val colorDisabled = 0xFF94A3B8.toInt()
     private val colorAmber = 0xFFB45309.toInt()
@@ -72,6 +74,15 @@ class OverlayView(context: Context) : LinearLayout(context) {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         gravity = Gravity.CENTER
         setPadding(dp(11), dp(2), dp(11), dp(2))
+    }
+
+    /** 实况页入口:♟ 图标(对局实况——棋谱/推荐/识别对照) */
+    private val liveButton = TextView(context).apply {
+        text = "♟"
+        setTextColor(0xFFFFFFFF.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        gravity = Gravity.CENTER
+        setPadding(dp(4), dp(2), dp(4), dp(2))
     }
 
     /** 上一手:推荐区顶部常驻,降级时保持可见作为局面锚点 */
@@ -148,7 +159,9 @@ class OverlayView(context: Context) : LinearLayout(context) {
             background = headerShape()
             addView(titleView, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(sideButton)
-            addView(space(dp(5)))
+            addView(space(dp(4)))
+            addView(liveButton)
+            addView(space(dp(4)))
             addView(sealButton)
             addView(space(dp(5)))
             addView(closeButton)
@@ -246,6 +259,9 @@ class OverlayView(context: Context) : LinearLayout(context) {
     // ---- 数据更新 ----
 
     fun setText(text: String) {
+        // 排障:"推荐区变空"曾无法归因——UI 更新全打点
+        com.cheese.assistant.util.AppLog.d("Overlay", "setText len=${text.length}")
+        showingSuggestions = false
         // 兼容旧接口:整段文本塞推荐区(带徽章的推荐走 setSuggestions)
         suggestionContainer.removeAllViews()
         suggestionContainer.addView(TextView(context).apply {
@@ -259,11 +275,20 @@ class OverlayView(context: Context) : LinearLayout(context) {
 
     /** 推荐列表:每条 = (序号, 文本, 威胁级别) */
     fun setSuggestions(items: List<Triple<Int, String, ThreatLevel>>) {
+        com.cheese.assistant.util.AppLog.d("Overlay", "setSuggestions n=${items.size}")
+        showingSuggestions = true
         suggestionContainer.removeAllViews()
         for ((index, text, threat) in items) {
             suggestionContainer.addView(suggestionRow(index, text, threat))
         }
     }
+
+    /** 推荐区当前行数(0=空,用于空推荐自愈检测) */
+    fun suggestionCount(): Int = suggestionContainer.childCount
+
+    /** 推荐区是否正显示候选(区分"候选挂着"与"文本态",自愈/覆盖判断用) */
+    var showingSuggestions = false
+        private set
 
     /** 上一手提示,如 "上一手 · 炮8平7"。空串隐藏 */
     fun setLastMove(text: String) {
@@ -288,6 +313,14 @@ class OverlayView(context: Context) : LinearLayout(context) {
         sealButton.background = pill(colorVermillion.toLong())
     }
 
+    /** 复盘进行中:按钮转灰蓝"复盘中",明确反馈已受理(完成时切"下一局") */
+    fun showReviewingMode() {
+        sealButton.text = "复盘中"
+        sealButton.setTextColor(0xFFFFFFFF.toInt())
+        sealButton.setPadding(dp(12), dp(3), dp(12), dp(3))
+        sealButton.background = pill(colorNavySoft.toLong())
+    }
+
     /** 新一局开始:从"下一局"态复位为对局中的"结" */
     fun resetSealButton() {
         sealButton.text = "结"
@@ -309,6 +342,11 @@ class OverlayView(context: Context) : LinearLayout(context) {
     }
 
     private var onRetrigger: (() -> Unit)? = null
+
+    /** ♟ 按钮 → 跳转对局实况页 */
+    fun setOnLiveListener(listener: () -> Unit) {
+        liveButton.setOnClickListener { listener() }
+    }
 
     fun setOnSideToggleListener(listener: (Boolean) -> Unit) {
         var isRed = recorderSide
@@ -357,8 +395,9 @@ class OverlayView(context: Context) : LinearLayout(context) {
     }
 
     /**
-     * 推荐行:**威胁用字面标签,直读不用猜**。
-     * 将军=朱红实心圆「将」+着法朱红加粗;打吃=藏蓝实心圆「吃」+着法藏蓝;
+     * 推荐行:**威胁用字面标签+深浅两级,直读不用猜**。
+     * 当前将=朱红实心「将」加粗;蹲杀(下一手可叫将)=淡朱红「将」不加粗;
+     * 当前吃=藏蓝实心「吃」加粗;打吃(下一步能吃)=淡蓝「吃」不加粗;
      * 无威胁=空心圆序号+普通着法。
      */
     private fun suggestionRow(index: Int, moveText: String, threat: ThreatLevel): View {
@@ -369,6 +408,8 @@ class OverlayView(context: Context) : LinearLayout(context) {
         }
         val isCheck = threat == ThreatLevel.CHECK
         val isCapture = threat == ThreatLevel.CAPTURE
+        val isThreatCheck = threat == ThreatLevel.THREAT_CHECK
+        val isThreatCapture = threat == ThreatLevel.THREAT_CAPTURE
         val badge = TextView(context).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setTypeface(Typeface.DEFAULT_BOLD)
@@ -385,23 +426,31 @@ class OverlayView(context: Context) : LinearLayout(context) {
                     setColor(colorVermillion)
                     setStroke(dp(2), colorVermillion)
                 }
+                isThreatCheck -> setColor(colorVermillionSoft)
                 isCapture -> {
                     setColor(colorNavy)
                     setStroke(dp(2), colorNavyLight)
                 }
+                isThreatCapture -> setColor(colorNavySoft)
                 else -> {
                     setColor(0x00000000)
                     setStroke(dp(1), colorLine)
                 }
             }
         }
+        // 深色徽章配白字;淡色徽章配同色系深字,一眼分出"当前/威胁"
         badge.text = when {
-            isCheck -> "将"
-            isCapture -> "吃"
+            isCheck || isThreatCheck -> "将"
+            isCapture || isThreatCapture -> "吃"
             else -> "$index"
         }
-        badge.setTextColor(if (threat == ThreatLevel.NONE) colorTextSecondary
-        else 0xFFFFFFFF.toInt())
+        badge.setTextColor(when {
+            isCheck -> 0xFFFFFFFF.toInt()
+            isThreatCheck -> colorVermillion
+            isCapture -> 0xFFFFFFFF.toInt()
+            isThreatCapture -> colorNavy
+            else -> colorTextSecondary
+        })
         row.addView(badge)
         row.addView(TextView(context).apply {
             text = moveText
@@ -411,10 +460,12 @@ class OverlayView(context: Context) : LinearLayout(context) {
                     setTextColor(colorVermillion)
                     setTypeface(Typeface.DEFAULT_BOLD)
                 }
+                isThreatCheck -> setTextColor(colorVermillion)
                 isCapture -> {
                     setTextColor(colorNavy)
                     setTypeface(Typeface.DEFAULT_BOLD)
                 }
+                isThreatCapture -> setTextColor(colorNavy)
                 else -> setTextColor(colorTextPrimary)
             }
         })
@@ -426,5 +477,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
             resources.displayMetrics).toInt()
 }
 
-/** 推荐着法的威胁级别(打吃/将军),与 ThreatMarker.Level 对应 */
-enum class ThreatLevel { NONE, CAPTURE, CHECK }
+/** 推荐着法的威胁级别(与 ThreatMarker.Level 对应)。
+ *  CAPTURE/THREAT_CAPTURE 分别=当前吃(深蓝)/打吃(淡蓝);
+ *  CHECK/THREAT_CHECK 分别=当前将(朱红)/蹲杀(淡朱红) */
+enum class ThreatLevel { NONE, THREAT_CAPTURE, CAPTURE, THREAT_CHECK, CHECK }

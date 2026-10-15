@@ -12,8 +12,8 @@ class ThreatMarkerTest {
     @Test
     fun `空头炮开局打中兵是打吃`() {
         // 炮二平五: h2 -> e2 (row7,col4)。炮到 e2 后直上: row6 col4 红兵为山,
-        // 山后 row3 col4 = 中卒(敌) → 该炮下一步可吃卒 → CAPTURE
-        assertEquals(ThreatMarker.Level.CAPTURE, ThreatMarker.of(fen, "h2e2"))
+        // 山后 row3 col4 = 中卒(敌) → 该炮下一步可吃卒 → 打打(非当前吃)
+        assertEquals(ThreatMarker.Level.THREAT_CAPTURE, ThreatMarker.of(fen, "h2e2"))
     }
 
     @Test
@@ -63,9 +63,9 @@ class ThreatMarkerTest {
     @Test
     fun `炮需隔山才能打吃`() {
         // 炮 d4(row5,col3) 平到 e4(row5,col4), 山 = 红马 e5(row4,col4),
-        // 山后 e6(row3,col4) 黑卒 → 该炮隔山吃卒 → CAPTURE
+        // 山后 e6(row3,col4) 黑卒 → 该炮隔山吃卒 → 打吃(非当前吃)
         val f = "4k4/9/9/4p4/4N4/3C5/9/9/9/4K4 w"
-        assertEquals(ThreatMarker.Level.CAPTURE, ThreatMarker.of(f, "d4e4"))
+        assertEquals(ThreatMarker.Level.THREAT_CAPTURE, ThreatMarker.of(f, "d4e4"))
     }
 
     @Test
