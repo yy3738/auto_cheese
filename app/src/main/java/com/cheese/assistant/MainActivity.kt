@@ -71,7 +71,30 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnLive).setOnClickListener {
             startActivity(Intent(this, com.cheese.assistant.ui.LiveGameActivity::class.java))
         }
-        findViewById<Button>(R.id.btnOverlay).setOnClickListener { toggleOverlay() }
+        findViewById<Button>(R.id.btnOverlay).setOnClickListener {
+            com.cheese.assistant.util.AppLog.i("Main",
+                "btnOverlay clicked, usageAccess=" +
+                    com.cheese.assistant.capture.ForegroundApp.hasUsageAccess(this) +
+                    " overlays=" + Settings.canDrawOverlays(this) +
+                    " svcRunning=" + com.cheese.assistant.service.AssistantService.isRunning)
+            if (!com.cheese.assistant.capture.ForegroundApp.hasUsageAccess(this)) {
+                Toast.makeText(this, "请开启弈枰的『使用情况访问』(用于判定前台是否在对局), 开启后回来再点此按钮", Toast.LENGTH_LONG).show()
+                startActivity(com.cheese.assistant.capture.ForegroundApp.usageAccessSettingsIntent())
+                return@setOnClickListener
+            }
+            if (com.cheese.assistant.service.AssistantService.isRunning) {
+                if (com.cheese.assistant.capture.ScreenCapture.isRunning) {
+                    Toast.makeText(this, "识别运行中, 已可切到对局界面", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                // 服务活但投屏死(进程被杀/授权失效): 先停再走授权重启
+                startService(overlayIntent(com.cheese.assistant.service.AssistantService.Action.STOP, ""))
+                Toast.makeText(this, "投屏已失效, 请再点一次此按钮重新启动", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            // 单路径: 直接起授权页, 授权成功后服务+悬浮窗+循环全自动
+            startActivity(Intent(this, com.cheese.assistant.capture.CapturePermissionActivity::class.java))
+        }
         findViewById<Button>(R.id.btnCapture).setOnClickListener { testCapture() }
         findViewById<Button>(R.id.btnRecognize).setOnClickListener { testRecognize() }
         findViewById<Button>(R.id.btnReview).setOnClickListener {

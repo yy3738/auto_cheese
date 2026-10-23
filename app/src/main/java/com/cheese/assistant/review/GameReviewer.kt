@@ -53,15 +53,28 @@ class GameReviewer(private val controller: SearchController) {
     /**
      * 复盘一局。moves 为完整棋谱；userIsRed 决定分析哪些局面
      * （轮到用户走、且非开局初始局面——初始局面没有"用户选择"）。返回逐局面结论。
+     *
+     * @param onProgress 复盘进度回调（已完成/总局面数）。复盘在模拟器上
+     *        每个 3000ms 搜索实际要 6s+，34 步的一局要几分钟；没有进度
+     *        用户会以为悬浮窗卡死在「复盘中」。
      */
-    suspend fun review(moves: List<MoveRecord>, userIsRed: Boolean): List<PositionReview> {
+    suspend fun review(
+        moves: List<MoveRecord>,
+        userIsRed: Boolean,
+        onProgress: suspend (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): List<PositionReview> {
+        val targets = moves.filter { m ->
+            val redToMove = m.fenBefore.substringAfter(' ').startsWith("w")
+            redToMove == userIsRed
+        }
+        val total = targets.size
+        onProgress(0, total)
         val out = ArrayList<PositionReview>()
-        for (m in moves) {
-            val before = m.fenBefore
-            val redToMove = before.substringAfter(' ').startsWith("w")
-            if (redToMove != userIsRed) continue // 只分析用户执方的着法
-            val r = analyzePosition(before, m.iccs, userIsRed) ?: continue
-            out.add(r)
+        for ((idx, m) in targets.withIndex()) {
+            onProgress(idx, total)
+            val r = analyzePosition(m.fenBefore, m.iccs, userIsRed)
+            if (r != null) out.add(r)
+            onProgress(idx + 1, total)
         }
         return out
     }

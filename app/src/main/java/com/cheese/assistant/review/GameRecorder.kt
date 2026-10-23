@@ -28,10 +28,13 @@ class GameRecorder {
     /** 尚未落 FEN 的最新局面（每步识别到新局面时更新） */
     private var lastPosition: Position? = null
     private var persistFile: File? = null
+    /** 用户显式开了新局：空谱点「结」时不要用孤儿备份把上一局复活 */
+    private var skipOrphanRestore = false
 
     val isEmpty: Boolean get() = moves.isEmpty()
 
     /** 首次识别到可信局面时调用：记开局时间与执方（可被手动覆盖） */
+    @Synchronized
     fun start(pos: Position, userIsRed: Boolean) {
         if (startedAt == 0L) startedAt = System.currentTimeMillis()
         this.userIsRed = userIsRed
@@ -39,6 +42,7 @@ class GameRecorder {
         persist()
     }
 
+    @Synchronized
     fun setUserSide(userIsRed: Boolean) {
         this.userIsRed = userIsRed
         persist()
@@ -49,6 +53,7 @@ class GameRecorder {
      * moverIsRed 为走子方（= 走子前轮走方），用于 FEN 的行棋字段。
      * 返回该步 ICCS（方向不可判时返回 null，调用方按识别抖动处理）。
      */
+    @Synchronized
     fun record(prev: Position, cur: Position, moverIsRed: Boolean): String? {
         var from = -1
         var to = -1
@@ -65,13 +70,18 @@ class GameRecorder {
             Position(cur.board, !moverIsRed).toFen(),
         ))
         lastPosition = cur
+        skipOrphanRestore = false
         persist()
         return iccs
     }
 
-    /** 重置（新对局/识别 3 次异常/复盘完成）——先备份未封存棋谱再清内存 */
-    fun reset() {
+    /** 重置（新对局/识别异常/复盘完成）——先备份未封存棋谱再清内存。
+     *  explicitNewGame=true 表示用户手点「开局」/识别到完整 START：
+     *  此时空谱点「结」不应把上一局孤儿备份复活。 */
+    @Synchronized
+    fun reset(explicitNewGame: Boolean = false) {
         backupOrphan()
+        skipOrphanRestore = explicitNewGame
         startedAt = 0L
         moves.clear()
         lastPosition = null
@@ -82,6 +92,7 @@ class GameRecorder {
      * 撤回最后一步识别(用户在实况页发现识别错时一键撤销):
      * 移除末步,lastPosition 回退到前一步的走后局面
      */
+    @Synchronized
     fun undoLast(): Boolean {
         if (moves.isEmpty()) return false
         moves.removeAt(moves.size - 1)
@@ -93,20 +104,69 @@ class GameRecorder {
     }
 
     /** 当前是否轮到用户走（基于最后记录的局面） */
+    @Synchronized
     fun isUserToMove(): Boolean {
         val pos = lastPosition ?: return false
         return pos.redToMove == userIsRed
     }
 
     /** 最后一个局面的 FEN（走子后） */
+    @Synchronized
     fun lastFen(): String? = lastPosition?.toFen()
 
+    /** 当前局面（走子后；手动纠错以它为基准） */
+    @Synchronized
+    fun currentPosition(): Position? = lastPosition
+
+    /**
+     * 只更新"当前局面"，不动历史棋谱。用于识别与棋谱回放长期不一致
+     * （漏记吃子）时以识别直读继续；实况页 match=false 会改画识别盘。
+     */
+    @Synchronized
+    fun setCurrentPosition(pos: Position) {
+        lastPosition = pos
+        persist()
+    }
+
+    /**
+     * 上一手之前的局面：有棋谱=末条的 fenBefore；无棋谱=当前局面。
+     * 「改掉上一手」以它为基准重新记一步。
+     */
+    @Synchronized
+    fun positionBeforeLast(): Position? {
+        if (moves.isEmpty()) return lastPosition
+        return Position.fromFen(moves.last().fenBefore)
+    }
+
+    /**
+     * 手动纠错记一步（2026-10-22 浮窗四下拉）。
+     * @param replaceLast true=改掉上一手（先移除末条再记）；
+     *                    false=补上漏识别的一手（直接追加）
+     * 返回 ICCS；盘面差异不是恰好一子移动时返回 null（调用方校验过合法性）
+     */
+    @Synchronized
+    fun recordManual(prev: Position, cur: Position, moverIsRed: Boolean,
+                     replaceLast: Boolean): String? {
+        if (replaceLast && moves.isNotEmpty()) {
+            moves.removeAt(moves.size - 1)
+            lastPosition = prev
+        }
+        return record(prev, cur, moverIsRed)
+    }
+
+    @Synchronized
     fun moveCount(): Int = moves.size
 
-    /** 封存用：棋谱快照 */
+    /** 棋谱快照 */
+    @Synchronized
     fun movesSnapshot(): List<MoveRecord> = moves.toList()
 
+    /** 末条记录（动画中间帧合并需读 fenBefore 还原走子前局面） */
+    @Synchronized
+    fun lastRecord(): MoveRecord? = moves.lastOrNull()
+
     /** 序列化为 JSON 存入 games.move_list_json */
+    @Synchronized
     fun toJson(): String {
         val arr = JSONArray()
         for (m in moves) {
@@ -122,6 +182,7 @@ class GameRecorder {
     }
 
     /** 进程死亡后恢复棋谱。有未封存记录返回 true（moves/执方/开局时间已还原） */
+    @Synchronized
     fun restoreFromDisk(): Boolean {
         val f = persistFile ?: return false
         return runCatching {
@@ -168,6 +229,7 @@ class GameRecorder {
     }
 
     /** 全量状态写盘（每步一次,量小,直接同步写） */
+    @Synchronized
     private fun persist() {
         val f = persistFile ?: return
         runCatching {
@@ -208,7 +270,9 @@ class GameRecorder {
      * 从孤儿备份救回被重置清掉的一局。备份一旦写入就不过期,只在被
      * 封存消费、被下一局的备份覆盖、或新对局记录了走子时更新
      */
+    @Synchronized
     fun restoreOrphan(): Boolean {
+        if (skipOrphanRestore) return false
         val f = persistFile ?: return false
         return runCatching {
             val src = File(f.parentFile, "recorder-orphan.json")

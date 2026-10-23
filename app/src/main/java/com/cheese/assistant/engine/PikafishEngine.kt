@@ -23,9 +23,12 @@ class PikafishEngine {
     external fun nativeSetPosition(fen: String, moves: Array<String>): Boolean
 
     /** 启动搜索。时限控制由 Kotlin 侧在 movetime 后调用 stop() 实现。 */
-    external fun nativeGo()
+    external fun nativeGo(movetimeMs: Int)
 
     external fun nativeStop()
+
+    /** 阻塞到上一轮搜索线程真正退出（stop 后收尾阶段） */
+    external fun nativeWaitForSearchFinished()
 
     /** 阻塞读一行引擎输出，超时返回 null。 */
     external fun nativePollLine(timeoutMs: Int): String?

@@ -20,9 +20,12 @@ TAG = sys.argv[2] if len(sys.argv) > 2 else "s1"
 ROOT = r'E:\learn\auto_cheese\samples'
 
 img = Image.open(SCREEN).convert('RGB')
+# 校准角按 1080x1920 采样, 任意分辨率截图按宽等比映射
+sc = img.width / 1080.0
 a = np.asarray(img).astype(np.float32)
 gray = 0.299 * a[..., 0] + 0.587 * a[..., 1] + 0.114 * a[..., 2]
-corners = [(70, 455), (1010, 455), (1010, 1455), (70, 1455)]
+corners = [(int(x * sc), int(y * sc))
+           for x, y in [(70, 455), (1010, 455), (1010, 1455), (70, 1455)]]
 pts = refine_grid(gray, bilinear_grid(*corners))
 cell = 0.0; n = 0
 for r in range(10):

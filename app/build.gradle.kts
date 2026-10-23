@@ -37,6 +37,10 @@ android {
             isMinifyEnabled = false
         }
     }
+    testOptions {
+        // JVM 单元测试中 android.util.Log 等返回默认值（AnchorRecovery 用 AppLog）
+        unitTests.isReturnDefaultValues = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -60,6 +64,8 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
     // OpenCV 将以本地 aar 或源码模块形式加入，待骨架跑通后接入
     implementation("org.opencv:opencv:4.10.0")
+    // ONNX Runtime Mobile: MobileNetV3-Small 棋子分类器推理(方案A 2026-10-20)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.1")
     testImplementation("junit:junit:4.13.2")

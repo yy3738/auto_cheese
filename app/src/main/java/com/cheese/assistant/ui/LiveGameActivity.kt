@@ -72,6 +72,7 @@ class LiveGameActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        GameLiveState.livePageOpen = true
         manualEdited = false
         refresh()
         handler.post(tick)
@@ -79,6 +80,7 @@ class LiveGameActivity : AppCompatActivity() {
 
     override fun onPause() {
         handler.removeCallbacks(tick)
+        GameLiveState.livePageOpen = false
         super.onPause()
     }
 
@@ -96,8 +98,12 @@ class LiveGameActivity : AppCompatActivity() {
         val matchView = findViewById<TextView>(R.id.tvMatch)
         val replayOk = GameLiveState.replayFen.isNotEmpty()
         when {
-            !replayOk -> {
+            !replayOk && GameLiveState.fen.isEmpty() -> {
                 matchView.text = "识别对照：等待识别..."
+                matchView.setTextColor(getColor(R.color.ink_soft))
+            }
+            !replayOk -> {
+                matchView.text = "识别直读（本局尚无棋谱记录，棋盘为识别局面）"
                 matchView.setTextColor(getColor(R.color.ink_soft))
             }
             GameLiveState.match == true -> {
@@ -106,16 +112,23 @@ class LiveGameActivity : AppCompatActivity() {
                 matchView.setTextColor(getColor(R.color.ink_soft))
             }
             else -> {
-                matchView.text = "⚠ 识别局面与棋谱不一致——以下棋盘为棋谱推演,识别可能有误"
+                matchView.text = "⚠ 棋谱与识别不一致——棋盘已切为识别直读" +
+                    "(幽灵步污染过的棋谱推演不可信, 2026-10-21)"
                 matchView.setTextColor(getColor(R.color.accent_red))
             }
         }
 
-        // 有手动纠正(或纠正防抖中)不动棋盘,否则覆盖用户的纠正
+        // 有手动纠正(或纠正防抖中)不动棋盘,否则覆盖用户的纠正。
+        // 渲染策略(2026-10-21): 棋谱一致 → 画推演盘; 不一致/无棋谱 →
+        // 画识别直读盘。旧策略"永远以棋谱为准"在棋谱被幽灵步污染后
+        // 会画出"黑 车凭空消失"的假盘(实测左上角黑车消失)
         if (manualEdited || editScheduled) return
-        val replay = GameLiveState.replayFen
-        if (replay.isEmpty()) return
-        val target = Position.fromFen(replay) ?: return
+        val trusted = GameLiveState.match == true
+        val fenForBoard = if (trusted) GameLiveState.replayFen.ifEmpty { GameLiveState.fen }
+                          else GameLiveState.fen
+        if (fenForBoard.isEmpty()) return
+        if (fenForBoard.isEmpty()) return
+        val target = Position.fromFen(fenForBoard) ?: return
         if (!boardView.position.board.contentEquals(target.board)) {
             boardView.position = target
         }

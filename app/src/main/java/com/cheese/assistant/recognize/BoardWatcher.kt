@@ -20,9 +20,35 @@ class BoardWatcher(
     private val dumpDir: File? = null,
     /** 会话开局即遇王误读(lastGood 未建立)时的王格锚点来源——棋谱回放局面 */
     private val kingFallback: (() -> Position?)? = null,
+    /** 引导锚点来源(棋谱回放/recorder 基准/初始局面):lastGood 未建立时
+     *  拒判格从它回填,替代"默认空格"。空格默认会把开局盲格的真实棋子
+     *  抹掉(实测 2026-10-19 新皮肤 (0,8) 黑车从第 1 帧消失→整局推荐对
+     *  敌方少车;自愈引导又抹掉双车触发 implausible×3 reset 毒化棋谱)
+     */
+    private val boardFallback: (() -> Position?)? = null,
+    /**
+     * 前台 App 判定(主轨 UsageStats, 2026-10-21): 返回
+     * true=对局在前台 / false=非对局前台(暂停识别) / null=无法判定
+     * (未授权)→ 交给边条指纹兜底。
+     */
+    private val foregroundCheck: (() -> Boolean?)? = null,
+    /**
+     * 逃生门回调:兜底锚点连续作废时触发。服务侧在此弃谱重建
+     * (GameRecorder.reset 自带孤儿备份落盘,供事后定位问题)。
+     * 用户确认方案:重建即弃谱(2026-10-19),毒谱留着也会把每次
+     * 自愈拉回毒锚点,永不收敛
+     */
+    private val onSalvage: (() -> Unit)? = null,
+    /**
+     * 悬浮窗当前屏幕矩形(像素)：边条指纹采样时跳过。
+     * 悬浮窗自身文字每帧变化，旧版把它采样进"前台是 JJ"的判据，
+     * 导致每 20 秒一轮「前台非对局界面, 识别暂停」假暂停。
+     */
+    private val overlayBounds: (() -> android.graphics.Rect?)? = null,
 ) {
 
     companion object {
+        private const val SKIP = -1000
         private const val DUMP_LIMIT = 5
         private const val QUIET_MS = 350L
         private const val POLL_TIMEOUT_MS = 250L
@@ -31,9 +57,46 @@ class BoardWatcher(
         // 允许差异点覆盖少量装饰动画像素
         private const val SAMPLE_STEPS = 48
         private const val MAX_DIFF_PIXELS = SAMPLE_STEPS * 2
-        private const val MIN_PIECES = 10
+        // 合法终局可以只剩双方王（2 子）；用双王+期望子数做可信门，
+        // 固定下限会误杀真实残局（实测 9 子残局被拒整局）
+        private const val MIN_PIECES = 2
         private const val BBOX_MARGIN = 20f
+        /** 连续识别失败帧数达到此值 → 弃锚点自愈（等价手点"重试识别"） */
+        private const val FAIL_RUN_RESET = 5
+        // 拒判格像素差分：每格 4×4 采样点，量化 8 级灰度；差分点超过此值
+        // 判定"该格发生真实变化"（对方走子落点）
+        private const val CELL_SNAP_GRID = 4
+        private const val CELL_SNAP_DIFF_LIMIT = 6
+        // 引导锚点冲突门:兜底局面与本帧 CONFIDENT 草稿的冲突格数上限。
+        // 真新局≈0-2(偶发高置信误读);残局/滞后者≥每步2格,超限即弃用
+        private const val MAX_FALLBACK_CONFLICTS = 8
+        /** 木色占比 ≥ 该值视为"该格仍有棋子"（实测棋子 0.56+，空位 0.02-） */
+        const val WARMTH_PIECE_MIN = 0.25f
     }
+
+        /** 连续识别失败计数（credibility/piece cap/unknown fail 共用） */
+        private var failRun = 0
+
+        /** 连续"全量重推仍失败"轮数：3 轮才弃锚点（不再第一轮就弃） */
+        private var hardFailRun = 0
+
+        /** 冻结/无新帧连续计数：投屏死亡自动停投屏走重授权 */
+        private var frozenRun = 0
+
+        /** JJ 对局页边条指纹(顶部条带, 底部条带): 非对局界面判定用 */
+        private var edgeFp: Pair<IntArray, IntArray>? = null
+
+        /** 前台非对局界面连续计数(自适应重学指纹用) */
+        private var mismatchRun = 0
+
+        /** 中局"期望有、本帧空"缺格集合的上一份快照（日志限频用） */
+        private var lastMissingSkipKey = ""
+
+        /** 期望局面冲突数的上一份快照（日志限频用） */
+        private var lastExpectedConflictKey = ""
+
+    /** 兜底锚点已被逃生门禁用（本轮识别会话内不再使用，重建成功后复位） */
+    private var fallbackDisabled = false
 
     // 网格外扩包围盒（原始校准坐标即可，吸附偏差 ~8px 被余量覆盖）
     private val bbox: IntArray by lazy {
@@ -48,8 +111,18 @@ class BoardWatcher(
             .map { it.toInt().coerceAtLeast(0) }.toIntArray()
     }
 
-    // 最近一次可信局面:缺王帧(王被光圈遮蔽)时用于判定是否遮蔽抖动
-    private var lastGood: Observed? = null
+    /**
+     * 锚点帧状态：局面必须保持识别矩阵 raw 方向（未 normalizeOrientation）。
+     * 旧版存 normalize 后的局面与 raw 草稿逐格比较——用户执黑（红在屏幕
+     * 上方）时锚点被翻转，比较全部错位，回填的是翻转位置的值，执黑局
+     * 识别表现为"永远识别中"（2026-10-18 定位）。
+     */
+    private class AnchorState(val raw: Position, val userIsRed: Boolean)
+
+    private var lastGood: AnchorState? = null
+
+    /** 锚点帧每格 4×4 灰度量化快照（90*16），拒判格像素差分判"真实变化"用 */
+    private var anchorSnap: IntArray? = null
 
     /**
      * 阻塞等待一个可信局面。返回 null 表示本次没有可信结果
@@ -58,19 +131,216 @@ class BoardWatcher(
      * 非棋盘画面（大厅/弹窗）可能凑齐棋子数但没有双王，必须挡住，
      * 否则缺王 FEN 喂给 Pikafish 会触发断言 abort 整个进程。
      */
-    fun waitForPosition(timeoutMs: Long = STABLE_TIMEOUT_MS): Observed? {
-        val bmp = ScreenCapture.captureStable(QUIET_MS, timeoutMs, ::sameRegion)
-            ?: return null.also {
-                AppLog.e("BoardWatcher", "waitForPosition: captureStable null")
+    /** 灰度量化(24 级步长) */
+    private fun grayQ(c: Int): Int {
+        val g = (0.299f * (c shr 16 and 0xFF) +
+            0.587f * (c shr 8 and 0xFF) + 0.114f * (c and 0xFF)) / 24f
+        return g.toInt()
+    }
+
+    /** 对局页边条采样: 顶部条带(30-350)+底部条带(1470-1822) 各 40 点。
+     *  跳过悬浮窗自身占据的采样点与顶部正中(JJ 计时器)——它们每帧都在变，
+     *  会把"前台是 JJ"误判成"非对局页面"并暂停识别 20s(2026-10-22 实测)。 */
+    private fun edgeSample(bmp: Bitmap): Pair<IntArray, IntArray> {
+        val top = IntArray(40) { SKIP }
+        val bot = IntArray(40) { SKIP }
+        val ob = overlayBounds?.invoke()
+        var k = 0
+        for (ty in 0 until 5) for (tx in 0 until 8) {
+            val x = ((tx + 0.5f) * bmp.width / 8).toInt().coerceIn(0, bmp.width - 1)
+            val ty0 = (30 + ty * 80).coerceAtMost(bmp.height - 1)
+            val by0 = (1470 + ty * 88).coerceAtMost(bmp.height - 1)
+            val topCenter = x in (bmp.width * 35 / 100)..(bmp.width * 65 / 100)
+            if (!topCenter && (ob == null || !ob.contains(x, ty0))) {
+                top[k] = grayQ(bmp.getPixel(x, ty0))
             }
-        val result = BoardRecognizer.recognize(bmp, grid, templates)
-        if (result.hasUnknown) {
-            AppLog.e("BoardWatcher", "waitForPosition: unknown ${result.unknown.count { it }}")
-            AppLog.d("BoardWatcher", result.matrixText.replace("\n", " | "))
-            dumpFrame(bmp)
+            if (ob == null || !ob.contains(x, by0)) {
+                bot[k] = grayQ(bmp.getPixel(x, by0))
+            }
+            k++
+        }
+        return top to bot
+    }
+
+    /** 量化值逐点一致率(|a-b|<=1 记一致; 双方都 SKIP 的点不计) */
+    private fun matchRatio(a: IntArray, b: IntArray): Float {
+        if (a.size != b.size || a.isEmpty()) return 0f
+        var m = 0
+        var n = 0
+        for (i in a.indices) {
+            if (a[i] == SKIP || b[i] == SKIP) continue
+            n++
+            if (Math.abs(a[i] - b[i]) <= 1) m++
+        }
+        return if (n == 0) 1f else m.toFloat() / n
+    }
+
+    /** 最近一帧稳定画面：静止棋盘 ImageReader 不推新帧时复用它继续识别 */
+    private var lastBmp: Bitmap? = null
+
+    fun waitForPosition(timeoutMs: Long = STABLE_TIMEOUT_MS): Observed? {
+        var prunedThisFrame = false
+        // 前台判定主轨: 非对局前台 → 暂停(不截帧不喂引擎)
+        if (foregroundCheck?.invoke() == false) {
+            Thread.sleep(QUIET_MS)
             return null
         }
-        val pos = normalizeOrientation(result.position)
+        // 实况页盖住棋盘时暂停识别(读到的是实况页自己渲染的盘)
+        if (com.cheese.assistant.service.GameLiveState.livePageOpen) {
+            Thread.sleep(QUIET_MS)
+            return null
+        }
+        // 静止画面 ImageReader 不推新帧是正常现象（2026-10-20 教训）。
+        // 旧版这里直接 return null → 对手思考/画面静止时悬浮窗一直
+        // 「等待稳定棋盘画面」十几秒，用户以为卡死并点重试（2026-10-22
+        // 实测重试把两步棋跳掉）。没有新帧就用上一帧继续识别，局面不变
+        // 时循环会保持现有推荐。
+        val fresh0 = ScreenCapture.captureFresh(QUIET_MS)
+        val bmp0 = fresh0 ?: lastBmp ?: run {
+            Thread.sleep(QUIET_MS)
+            return null
+        }
+        if (fresh0 != null) lastBmp = fresh0
+        // 前台 App 判定(2026-10-21): JJ 对局页边条指纹不符 = 当前不是
+        // 对局界面(弈枰主页面/实况页/弹窗)——暂停识别, 不喂引擎不记谱。
+        // 曾因此把主页面预览盘当棋盘读出 33-34 子假象并引发连环风暴。
+        val fp = if (foregroundCheck == null || foregroundCheck.invoke() == null) edgeFp else null
+        if (fp != null) {
+            val cur = edgeSample(bmp0)
+            val okTop = matchRatio(fp.first, cur.first) >= 0.8f
+            val okBot = matchRatio(fp.second, cur.second) >= 0.8f
+            if (!(okTop && okBot)) {
+                mismatchRun++
+                if (mismatchRun == 1 || mismatchRun % 40 == 0) {
+                    AppLog.w("BoardWatcher", "前台非对局界面(边条指纹不符), 识别暂停 ×$mismatchRun")
+                }
+                if (mismatchRun >= 60) {
+                    // 自适应重学: 长期不符可能是换桌/换皮肤, 学一次放行,
+                    // 之后靠 credibility 硬门与落定观察期把关
+                    AppLog.w("BoardWatcher", "非对局界面持续 60 帧, 重学边条指纹(自适应)")
+                    edgeFp = cur
+                    mismatchRun = 0
+                }
+                Thread.sleep(QUIET_MS)
+                return null
+            }
+        }
+        // 稳定等待: 连续两帧一致才识别(动画结束的信号, 识别时序的基础)
+        val bmp = if (fresh0 == null) {
+            // 没有新帧 = 画面静止，直接用上一帧，不再空等
+            bmp0
+        } else {
+            ScreenCapture.captureStable(QUIET_MS, timeoutMs, ::sameRegion)
+                ?: lastBmp
+                ?: run {
+                    AppLog.e("BoardWatcher", "waitForPosition: captureStable null")
+                    return null
+                }
+        }
+        lastBmp = bmp
+        val result = BoardRecognizer.recognize(bmp, grid, templates)
+        // 本帧像素快照只算一次：拒判变化判定/少子修复/超限核对/输出共用
+        val frameSnap = cellSnapshot(bmp)
+        // 每格木色占比：棋子是暖色木盘，空位是冷色石纹。用于少子修复与
+        // "棋子无故消失"的像素裁决（0.56+ vs 0.00，实测分离度很高）
+        val frameWarmth = cellWarmth(bmp)
+        var pos = result.position
+        // 本帧朝向只判一次：期望局面(raw) 与 normalize 都按它翻转
+        val flip = shouldFlip(pos)
+        if (result.hasUnknown || result.unknown.any { it }) {
+        // 拒判格先走锚点仲裁：静态拒判格用锚点回填（带新鲜度
+        // 记账），变化格上的拒判 → 走消失子推测/整帧作废。
+        // lastGood 未建立(自愈/中途开启)时用 boardFallback(棋谱
+        // 回放)做引导锚点——但兜底局面可能与真实盘面差太远(实测
+        // 点「结」后残局棋盘上 START 兜底复活开局子,锚点永不通约,
+        // 每帧推测失败 2026-10-19)。冲突门:与本帧 CONFIDENT 草稿
+        // 逐格比对,冲突格多 = 兜底不可信,弃用回空格默认引导
+        var anchor: Position? = lastGood?.raw
+        var anchorIsFallback = false
+        if (anchor == null && !fallbackDisabled) {
+            // 兜底局面是 FEN/normalize 域 → 翻回 raw 再与本帧草稿逐格比较
+            val fb = boardFallback?.invoke()?.let { orient(it, flip) }
+            if (fb != null) {
+                // 冲突门只在 CNN 有足够视野时有效:首帧近乎全盲(实测 84 格
+                // 拒判仅 6 格置信)时冲突数必然小,START 兜底被放进残局棋盘,
+                // 回填出垃圾局面 set_position failed,锚点永久带毒(2026-10-19
+                // 实测"识别不稳定"整局)。盲帧一律不用兜底,回空格默认
+                var confident = 0
+                var conflicts = 0
+                for (i in 0 until 90) {
+                    if (result.confidence[i] == EngineResult.Confidence.CONFIDENT) {
+                        confident++
+                        if (pos.board[i] != fb.board[i]) conflicts++
+                    }
+                }
+                if (confident >= 30 && conflicts <= MAX_FALLBACK_CONFLICTS) {
+                    anchor = fb
+                    anchorIsFallback = true
+                } else if (fb != null) {
+                    AppLog.w("BoardWatcher",
+                        "board fallback rejected: confident=$confident conflicts=$conflicts")
+                }
+            }
+        }
+            val changed = BooleanArray(90)
+            if (anchor != null) {
+                // 拒判格草稿无值可比较：改用与锚点帧的像素差分判"该格是否
+                // 真实变化"。旧版一律按静态处理，对方走子落点被回填旧值 →
+                // 局面恒等于锚点 → 走子被吞、永不记账（2026-10-18 实测
+                // 8 分钟零 step；落点原为空格时 backfillRun 不递增，连
+                // 自愈都不触发）。石纹性拒判像素与锚点帧一致，照旧回填。
+                val snap = anchorSnap
+                val curSnap = if (snap != null) frameSnap else null
+                for (i in 0 until 90) {
+                    changed[i] = if (result.unknown[i]) {
+                        curSnap != null && cellDiff(snap!!, curSnap, i) > CELL_SNAP_DIFF_LIMIT
+                    } else {
+                        anchor.board[i] != pos.board[i]
+                    }
+                }
+            }
+            // 无锚点时 changed 保持全 false：拒判格全部走 bootstrap 路径
+            // （默认空格 + credibility 硬门把关），否则首帧锚点永远建不起来
+            val draft = EngineResult(pos.board, result.confidence, result.matrixText)
+            val resolved = AnchorRecovery.resolve(draft, anchor, changed,
+                fallbackAnchor = anchorIsFallback)
+            if (resolved == null) {
+                AppLog.e("BoardWatcher", "waitForPosition: unknown ${result.unknown.count { it }} (anchor recovery failed)")
+                AppLog.d("BoardWatcher", result.matrixText.replace("\n", " | "))
+                dumpFrame(bmp)
+                onFrameFailed(fallbackPoisoned = anchorIsFallback)
+                return null
+            }
+            pos = resolved
+        }
+        // 期望局面可信门：与本帧高置信格冲突 > 阈值 = 过期/毒谱。
+        // 不能拿它做子数门、补子或超限核对——否则真实盘面会被它永久拒绝
+        // （2026-10-22 实测：棋谱回放 32 子、真实画面 29 子，每帧 countTooLow）。
+        val expected = expectedRaw(pos)
+        var expectedConflicts = 0
+        if (expected != null) {
+            for (i in 0 until 90) {
+                if (result.confidence[i] == EngineResult.Confidence.CONFIDENT &&
+                    expected.board[i] != pos.board[i]) expectedConflicts++
+            }
+        }
+        val expectedBoard = expected?.takeIf { expectedConflicts <= MAX_FALLBACK_CONFLICTS }
+        if (expectedBoard != null) {
+            repairMissingExpected(expectedBoard, pos, frameWarmth)?.let { pos = it }
+        } else if (expected != null) {
+            val key = expectedConflicts.toString()
+            if (key != lastExpectedConflictKey) {
+                AppLog.w("BoardWatcher",
+                    "expected board unreliable: conflicts=$expectedConflicts " +
+                        "(> $MAX_FALLBACK_CONFLICTS), ignore for count/repair/cap")
+                lastExpectedConflictKey = key
+            }
+        } else {
+            lastExpectedConflictKey = ""
+        }
+        val expectedNorm = expectedBoard?.let { orient(it, flip) }
+        val normalized = orient(pos, flip)
+        var normalizedPruned = normalized
         var redKings = 0
         var blackKings = 0
         var pieces = 0
@@ -81,18 +351,45 @@ class BoardWatcher(
                 if (p == Piece.B_KING) blackKings++
             }
         }
-        if (redKings != 1 || blackKings != 1 || pieces < MIN_PIECES) {
+        // 终局合法性：不能再用固定 MIN_PIECES 拦（实测残局 9 子被当"非棋盘"
+        // 每帧拒绝，纠错后悬浮窗永远不出推荐）。改为：双王必须齐全 +
+        // 与本帧期望局面（棋谱回放/上次可信帧）棋子数相差不超过 2。
+        // 期望不可信时不做相对比较；START 兜底在残局画面明显过期时也不比。
+        var diffStart = 0
+        for (i in 0 until 90) if (pos.board[i] != Position.START.board[i]) diffStart++
+        val expectedCount = expectedBoard?.board?.count { it != null }
+        val startFallbackStale =
+            expectedBoard?.board?.contentEquals(Position.START.board) == true && diffStart > 6
+        val countTooLow = expectedCount != null && !startFallbackStale &&
+            pieces < expectedCount - 2
+        if (redKings != 1 || blackKings != 1 || pieces < MIN_PIECES || countTooLow) {
+            // 探针: 6 个采样点像素, 与 adb screencap 同点对拍——区分
+            // "投屏冻结" 与 "识别冻结" (2026-10-20)
+            val probe = (0 until 6).joinToString(" ") { k ->
+                val px = 200 + k * 140
+                val py = 600 + (k % 3) * 250
+                Integer.toHexString(bmp.getPixel(px.coerceAtMost(bmp.width - 1),
+                    py.coerceAtMost(bmp.height - 1)))
+            }
             AppLog.e("BoardWatcher",
-                "waitForPosition: credibility fail redK=$redKings blackK=$blackKings pieces=$pieces")
+                "waitForPosition: credibility fail redK=$redKings blackK=$blackKings " +
+                    "pieces=$pieces expected=$expectedCount conflicts=$expectedConflicts " +
+                    "countTooLow=$countTooLow probe=$probe")
+            // 全空帧(子数 0)连发多为界面切换(大厅/结算/重授权等待),
+            // 识别层不做自动停投屏——曾把一切静止场景错杀成重授权
+            // 循环(2026-10-20 回归, 已撤)。识别不出来由用户手动重试
+            // 连续失败自愈: 先全量重推保留锚点, 3 轮仍失败才弃锚点
+            onFrameFailed()
             // 矩阵行=屏幕行(normalize 前),直接对照截图定位多出的假王
             AppLog.d("BoardWatcher", result.matrixText.replace("\n", " | "))
             // 王被光圈/将军特效遮蔽的帧(缺王)若相对上次可信局面只是
             // "消失",属遮蔽抖动:复用上次结果。会话从未成功过(lastGood
             // 未建立)时,用棋谱回放局面兜底——否则开局王误读会死锁整局
-            val anchorForKing = lastGood?.pos ?: kingFallback?.invoke()
+            val anchorForKing = lastGood?.raw ?: kingFallback?.invoke()
             AppLog.d("BoardWatcher",
                 "king fail: anchor=${anchorForKing != null} lastGood=${lastGood != null}")
             anchorForKing?.let { a ->
+                // a 与 pos 都在 raw 识别矩阵方向，restore 与 diff 计数同域
                 MoveCheck.restoreMissingKings(a, pos)?.let { repaired ->
                     // 门禁:恢复结果与锚点差异必须很小(王格误读+至多一两格)。
                     // 无门禁时大厅/结算页的任意画面被强塞双王,垃圾局面变成
@@ -107,43 +404,197 @@ class BoardWatcher(
                     }
                     AppLog.d("BoardWatcher", "king occluded, restored" +
                         (if (lastGood == null) " (bootstrap)" else ""))
-                    val red = if (lastGood != null) lastGood!!.userIsRed
-                              else MoveCheck.userIsRed(a)
-                    return Observed(repaired, red).also { lastGood = it }
+                    val userRed = lastGood?.userIsRed ?: MoveCheck.userIsRed(a)
+                    lastGood = AnchorState(repaired, userRed)
+                    anchorSnap = cellSnapshot(bmp)
+                    failRun = 0
+                    hardFailRun = 0
+                    fallbackDisabled = false
+                    return Observed(normalizeOrientation(repaired), userRed,
+                        warmth = frameWarmth)
                 }
             }
             return null
         }
-        // 每色棋子上限:颜色误配(实测红车→黑车)或结算弹窗半遮棋盘的
-        // 垃圾帧会产生"黑方3车/红方0车"类非法局面,喂给引擎就是
-        // set_position failed,而失败不缓存 → 同一垃圾 FEN 每帧重烧
-        // 3.8s 引擎,整机被拖慢。超上限帧一律不可信,在源头挡住
+        // 每色棋子上限：颜色误配(红车↔黑车)或残影会产生 3 车/3 马类非法局面。
+        // 2026-10-22 用户确认：绝不按 margin 删真子（实测被剔的正是 (0,0)
+        // 真黑车）。顺序：期望局面核对 → 仍超限整帧作废 + 强制重推。
+        val snapCurCap = if (anchorSnap != null) cellSnapshot(bmp) else null
         for (p in Piece.entries) {
             val cap = when (p) {
                 Piece.R_KING, Piece.B_KING -> 1
                 Piece.R_PAWN, Piece.B_PAWN -> 5
                 else -> 2
             }
-            val n = pos.board.count { it == p }
-            if (n > cap) {
-                AppLog.e("BoardWatcher", "waitForPosition: piece cap $p=$n")
-                AppLog.d("BoardWatcher", result.matrixText.replace("\n", " | "))
-                dumpFrame(bmp)
-                return null
+            var over = normalizedPruned.board.count { it == p } - cap
+            if (over <= 0) continue
+            // ① 期望局面核对：期望格不是 p（空/异子）且像素静止 → 按期望改回。
+            //    首帧没有像素快照时不猜颜色，宁可整帧作废也不删真子。
+            if (expectedNorm != null) {
+                val b = normalizedPruned.board.copyOf()
+                var restored = 0
+                var phantomRemoved = false
+                for (i in 0 until 90) {
+                    if (over <= 0) break
+                    if (b[i] != p) continue
+                    val e = expectedNorm.board[i]
+                    if (e == p) continue
+                    val static = snapCurCap != null && anchorSnap != null &&
+                        cellDiff(anchorSnap!!, snapCurCap, i) <= CELL_SNAP_DIFF_LIMIT
+                    // 只认"像素没动过"的证据：首帧没有锚点快照时不猜颜色，
+                    // 宁可整帧作废，也不能基于过期期望删掉真子
+                    if (static) {
+                        b[i] = e
+                        over--
+                        restored++
+                        if (e == null) phantomRemoved = true
+                        AppLog.w("BoardWatcher",
+                            "piece cap $p: expected restore (${i / 9},${i % 9}) → " +
+                                (e?.cnName ?: "空") + " [static]")
+                    }
+                }
+                if (restored > 0) {
+                    normalizedPruned = Position(b, normalizedPruned.redToMove)
+                    // 只有"删掉期望为空的幻影"才需要让确认期多等一帧；
+                    // 颜色/同形核对是确定性的，不能每帧都挡住确认
+                    if (phantomRemoved) prunedThisFrame = true
+                }
             }
+            if (over <= 0) continue
+            // ② 仍超限：整帧拒收 + 强制重推这些格；绝不删子
+            val cells = (0 until 90).filter { normalizedPruned.board[it] == p }
+            AppLog.e("BoardWatcher",
+                "piece cap $p=${cells.size} > $cap, reject frame; cells=" +
+                    cells.joinToString { "(${it / 9},${it % 9}):" +
+                        (result.margins?.get(it)?.toString()?.take(5) ?: "?") })
+            AppLog.d("BoardWatcher", result.matrixText.replace("\n", " | "))
+            dumpFrame(bmp)
+            RecognizerEngineFactory.invalidate(cells)
+            onFrameFailed()
+            return null
         }
-        AppLog.d("BoardWatcher", "position OK pieces=$pieces")
-        return Observed(pos, MoveCheck.userIsRed(result.position)).also { lastGood = it }
+        failRun = 0
+        hardFailRun = 0
+        fallbackDisabled = false
+        frozenRun = 0
+        val finalPieces = normalizedPruned.board.count { it != null }
+        AppLog.d("BoardWatcher", "position OK pieces=$finalPieces")
+        if (edgeFp == null) {
+            edgeFp = edgeSample(bmp0)
+            AppLog.i("BoardWatcher", "边条指纹已记录(对局页基线, 依据成功识别帧)")
+        }
+        val userRed = MoveCheck.userIsRed(pos)
+        val snapCur = cellSnapshot(bmp)
+        val snapAnchor = anchorSnap
+        // 锚点存最终盘面：旧版存 pre-prune 的 pos，3 红车的毒会带进下一帧
+        lastGood = AnchorState(orient(normalizedPruned, flip), userRed)
+        anchorSnap = snapCur
+        return Observed(normalizedPruned, userRed, prunedThisFrame,
+            snapCur.clone(), snapAnchor?.clone(), frameWarmth)
     }
 
-    /** 识别成功的一帧：归一化局面 + 用户执方（屏幕最下一排的王色 = 用户） */
-    class Observed(val pos: Position, val userIsRed: Boolean)
+    /** 识别成功的一帧：归一化局面 + 用户执方 + 裁剪/快照上下文 */
+    class Observed(
+        val pos: Position,
+        val userIsRed: Boolean,
+        val prunedThisFrame: Boolean = false,
+        val snapCur: IntArray? = null,
+        val snapAnchor: IntArray? = null,
+        /** 每格木色占比（raw 域）：棋子 0.56+，空位 0.02- */
+        val warmth: FloatArray? = null,
+    )
 
-    /** 识别失败帧落盘（app 内部存储），adb pull 出来给 PC 端 diag 对比 */
+    /** 每格中心 4×4 采样（覆盖约整格），灰度量化 8 级，抵消压缩/云影噪声 */
+    private fun cellSnapshot(bmp: Bitmap): IntArray {
+        val n = CELL_SNAP_GRID * CELL_SNAP_GRID
+        val out = IntArray(90 * n)
+        val half = (CELL_SNAP_GRID - 1) / 2f
+        val step = (grid.cellSize / (CELL_SNAP_GRID - 1)).toInt().coerceAtLeast(1)
+        for (i in 0 until 90) {
+            val cx = grid.xs[i].toInt()
+            val cy = grid.ys[i].toInt()
+            for (dy in 0 until CELL_SNAP_GRID) {
+                for (dx in 0 until CELL_SNAP_GRID) {
+                    val x = (cx + (dx - half) * step).toInt().coerceIn(0, bmp.width - 1)
+                    val y = (cy + (dy - half) * step).toInt().coerceIn(0, bmp.height - 1)
+                    val c = bmp.getPixel(x, y)
+                    val g = 0.299f * (c shr 16 and 0xFF) + 0.587f * (c shr 8 and 0xFF) +
+                        0.114f * (c and 0xFF)
+                    out[i * n + dy * CELL_SNAP_GRID + dx] = (g / 32f).toInt()
+                }
+            }
+        }
+        return out
+    }
+
+    fun cellDiff(a: IntArray, b: IntArray, cell: Int): Int {
+        val n = CELL_SNAP_GRID * CELL_SNAP_GRID
+        val o = cell * n
+        var d = 0
+        for (k in 0 until n) if (a[o + k] != b[o + k]) d++
+        return d
+    }
+
+    /**
+     * 每格木色占比：中心 60% 的 5×5 采样中 `R-B>40` 的比例。
+     * 棋子=暖色木盘（实测 0.56-1.00），空位=冷色石纹（0.00-0.02）。
+     * 用于"期望有子、本帧空"到底是漏读还是真被吃。
+     */
+    private fun cellWarmth(bmp: Bitmap): FloatArray {
+        val out = FloatArray(90)
+        val n = 5
+        val step = grid.cellSize * 0.60f / (n - 1)
+        for (i in 0 until 90) {
+            val cx = grid.xs[i]
+            val cy = grid.ys[i]
+            var warm = 0
+            for (dy in 0 until n) for (dx in 0 until n) {
+                val x = (cx + (dx - 2) * step).toInt().coerceIn(0, bmp.width - 1)
+                val y = (cy + (dy - 2) * step).toInt().coerceIn(0, bmp.height - 1)
+                val c = bmp.getPixel(x, y)
+                if (((c shr 16 and 0xFF) - (c and 0xFF)) > 40) warm++
+            }
+            out[i] = warm / (n * n).toFloat()
+        }
+        return out
+    }
+
+    /**
+     * 连续失败自愈（2026-10-22 改）：先让懒推理全量重推，保留锚点；
+     * 连续 3 轮（≈15 帧）仍失败才丢锚点。旧版第 5 帧就丢锚点，
+     * 而错误分类往往正是被懒缓存冻结的——先重推比丢锚点更对症。
+     *
+     * @param fallbackPoisoned 本帧锚点来自棋谱兜底：多轮失败说明兜底
+     *        局面本身是毒的（旧棋谱/残局），走逃生门弃谱重建。
+     */
+    private fun onFrameFailed(fallbackPoisoned: Boolean = false) {
+        if (++failRun < FAIL_RUN_RESET) return
+        failRun = 0
+        RecognizerEngineFactory.invalidateAll()
+        AppLog.w("BoardWatcher",
+            "连续失败 $FAIL_RUN_RESET 帧, 全量重推(保留锚点)")
+        if (++hardFailRun >= 3) {
+            hardFailRun = 0
+            if (lastGood != null) {
+                AppLog.w("BoardWatcher", "连续 3 轮全量重推仍失败, 重置锚点自愈")
+                lastGood = null
+            } else if (fallbackPoisoned && !fallbackDisabled) {
+                fallbackDisabled = true
+                AppLog.e("BoardWatcher",
+                    "fallback anchor poisoned, disable fallback, rebuild from bare CNN view")
+                onSalvage?.invoke()
+            }
+        }
+    }
+
+    /** 识别失败帧落盘（app 内部存储），adb pull 出来给 PC 端 diag 对比。
+     *  轮转删除最旧——固定上限若不轮转, 早期帧永久占坑, 后续失败帧
+     *  全部丢失(2026-10-17 实测 18:49 的 5 张占满, 20:32 的关键帧没存到) */
     private fun dumpFrame(bmp: Bitmap) {
         val dir = dumpDir ?: return
         runCatching {
-            if ((dir.listFiles()?.size ?: 0) >= DUMP_LIMIT) return
+            val files = dir.listFiles()?.sortedBy { it.name } ?: return
+            if (files.size >= DUMP_LIMIT) files.first().delete()
             val f = File(dir, "mp_${System.currentTimeMillis()}.png")
             f.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
             AppLog.e("BoardWatcher", "dumpFrame: ${f.name}")
@@ -157,16 +608,88 @@ class BoardWatcher(
      * 屏幕方向，红在上时上下翻转（列不变——物理棋盘 a 线总在屏幕左；
      * 若对方 App 的"翻转棋盘"改变网格布局，需重新校准）。
      */
-    private fun normalizeOrientation(pos: Position): Position {
+    private fun normalizeOrientation(pos: Position): Position =
+        orient(pos, shouldFlip(pos))
+
+    /** 本帧是否红在屏幕上方（需要上下翻转） */
+    private fun shouldFlip(pos: Position): Boolean {
         val redRow = pos.board.indexOfFirst { it == Piece.R_KING } / 9
         val blackRow = pos.board.indexOfFirst { it == Piece.B_KING } / 9
-        if (redRow > blackRow) return pos
+        return !(redRow > blackRow)
+    }
+
+    /** 按同一 flip 决定翻转局面——期望局面必须与本帧同域(raw)比较 */
+    private fun orient(pos: Position, flip: Boolean): Position {
+        if (!flip) return pos
         val flipped = Array(90) { i ->
             val r = i / 9
             val c = i % 9
             pos.board[(9 - r) * 9 + c]
         }
         return Position(flipped, pos.redToMove)
+    }
+
+    /**
+     * 期望局面（raw 域）：优先棋谱回放/recorder 基准/START，其次上一可信帧。
+     *
+     * 为什么 fallback 优先于 lastGood：lastGood 只是"上一帧被接受的盘面"，
+     * 它本身可能已经被误读污染；棋谱回放是经过走子合法性校验的记录。
+     * fallback 返回的是 normalize 后的局面（FEN 域），按本帧王的朝向翻回 raw。
+     */
+    private fun expectedRaw(pos: Position): Position? {
+        val flip = shouldFlip(pos)
+        boardFallback?.invoke()?.let { return orient(it, flip) }   // FEN 域 → raw
+        lastGood?.raw?.let { return it }                            // 已是 raw
+        kingFallback?.invoke()?.let { return orient(it, flip) }     // FEN 域 → raw
+        return null
+    }
+
+    /**
+     * 用期望局面补齐"无故消失"的棋子（少子根因，2026-10-22）。
+     *
+     * 只在以下条件同时满足时生效：
+     * - 本帧棋子集合是期望的子集：期望有子→本帧空（漏读）才补；
+     *   本帧多出期望没有的子 = 可能是真实走子落点，交给走子校验，不补；
+     *   同格异子 = 冲突，交给颜色门/超限核对，不在这里猜。
+     * - 缺失格数 1..3：一步走子最多让 1-2 格变化，超过说明期望本身过期。
+     *
+     * 象棋里棋子不会凭空消失（只能被吃，且吃子会在落点出现敌子），
+     * 所以"期望有、本帧空"一定是识别漏读。修复只补回期望值。
+     */
+    private fun repairMissingExpected(
+        expected: Position, pos: Position, warmth: FloatArray,
+    ): Position? {
+        val repaired = BoardRepair.restoreMissing(expected, pos) ?: return null
+        val b = repaired.board.copyOf()
+        val restored = ArrayList<Int>()
+        val skipped = ArrayList<Int>()
+        for (i in 0 until 90) {
+            if (pos.board[i] != null || repaired.board[i] == null) continue
+            if (warmth[i] >= WARMTH_PIECE_MIN) {
+                restored.add(i)                 // 该格仍是木色棋子：真漏读
+            } else {
+                b[i] = null                     // 已是冷色空盘：真被吃/走开
+                skipped.add(i)
+            }
+        }
+        if (restored.isEmpty()) {
+            val key = skipped.joinToString(",")
+            if (skipped.isNotEmpty() && key != lastMissingSkipKey) {
+                AppLog.w("BoardWatcher",
+                    "expected restore skipped (cold/empty cells): " +
+                        skipped.joinToString { "(${it / 9},${it % 9})${expected.board[it]?.cnName}" })
+            }
+            lastMissingSkipKey = key
+            return null
+        }
+        if (skipped.isNotEmpty()) {
+            AppLog.w("BoardWatcher", "expected restore skipped cold: " +
+                skipped.joinToString { "(${it / 9},${it % 9})" })
+        }
+        AppLog.w("BoardWatcher", "expected-piece restore: " +
+            restored.joinToString { "(${it / 9},${it % 9})${b[it]?.cnName}" })
+        lastMissingSkipKey = ""
+        return Position(b, pos.redToMove)
     }
 
     /**
@@ -263,6 +786,32 @@ object MoveCheck {
 
     fun isPlausibleStep(prev: Position, cur: Position): Boolean =
         stepMoverIsRed(prev, cur) != null
+
+    /**
+     * 严格单步 + 象棋规则校验: 恰好 2 处差异、移动者身份吻合、且
+     * XiangqiRules 判定是合法走法时返回 (from,to); 否则 null。
+     * 用途: 记谱前把关——棋规上不可能的"瞬移"(实测黑马 (0,1)→(0,7)
+     * 后排瞬移 7 格被记进棋谱, 推演盘黑车凭空消失, 2026-10-21)在
+     * 入谱前拦下, 落入推测/作废路径。
+     */
+    fun legalStepPair(prev: Position, cur: Position): Pair<Int, Int>? {
+        var i = -1
+        var j = -1
+        for (k in 0 until 90) {
+            if (prev.board[k] == cur.board[k]) continue
+            if (i < 0) i = k else if (j < 0) j = k else return null
+        }
+        if (i < 0 || j < 0) return null
+        for ((from, to) in listOf(i to j, j to i)) {
+            val mover = prev.board[from] ?: continue
+            if (cur.board[from] != null) continue
+            if (cur.board[to] != mover) continue
+            val captured = prev.board[to]
+            if (captured != null && captured.side == mover.side) continue
+            if (XiangqiRules.canMove(prev.board, from, to)) return from to to
+        }
+        return null
+    }
 
     /**
      * 光圈遮蔽判定：JJ 的行棋/落子光圈罩在棋子上时，"白占比判空"会把被罩

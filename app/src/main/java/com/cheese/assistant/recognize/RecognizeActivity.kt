@@ -52,6 +52,9 @@ class RecognizeActivity : Activity() {
         }
         grid = g
         templates = TemplateStore.load(this, targetApp)
+        // CNN 权重加载（手动工作台继续走 NCC 采样主路，工厂供影子对照/切换用）
+        PreferenceAccess.appContext = this
+        RecognizerEngineFactory.init(this)
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 

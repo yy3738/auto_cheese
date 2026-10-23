@@ -7,6 +7,8 @@
 #include <condition_variable>
 #include <chrono>
 #include <sstream>
+#include <atomic>
+#include <thread>
 #include <android/log.h>
 
 #include "attacks.h"
@@ -26,6 +28,10 @@ namespace {
 
 std::unique_ptr<Engine> g_engine;
 bool                    g_initialized = false;
+// NNUE 权重校验完成标志：EvalFile 的加载/校验是异步的，setoption 返回时
+// 网络可能还没就绪。首搜若抢在加载前会返回深度1/评分0的退化结果
+// （实测 14:37:09.883 搜索、09.927 NNUE 才 ready → 首推兵九进一 +0.0）。
+std::atomic<bool>       g_networkReady{false};
 
 std::mutex              g_outMutex;
 std::deque<std::string> g_outQueue;
@@ -110,13 +116,21 @@ Java_com_cheese_assistant_engine_PikafishEngine_nativeInit(JNIEnv* env, jobject,
         // 引擎的校验/诊断信息（NNUE 加载结果等）输出到 logcat
         g_engine->set_on_verify_network([](std::string_view s) {
             ALOGE("engine: %.*s", static_cast<int>(s.size()), s.data());
+            g_networkReady.store(true);
         });
         g_initialized = true;
 
         auto& options = g_engine->get_options();
         // OptionsMap::setoption 期望流从 "name" 开始（"setoption" 已在 UCI 分发层消费）
         std::istringstream iss("name EvalFile value " + evalFile);
+        g_networkReady.store(false);
         options.setoption(iss);
+        // 等 NNUE 校验完成再返回：否则调用方立刻 go() 会在无网络状态搜索，
+        // 得到深度1/评分0的退化结果。10s 超时兜底（模拟器加载约 3-6s）。
+        for (int i = 0; i < 100 && !g_networkReady.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (!g_networkReady.load())
+            ALOGE("engine: NNUE verify timeout after 10s, first search may be degenerate");
         return JNI_TRUE;
     } catch (const std::exception& e) {
         ALOGE("engine init failed: %s", e.what());
@@ -172,15 +186,26 @@ Java_com_cheese_assistant_engine_PikafishEngine_nativeSetPosition(JNIEnv* env, j
 }
 
 JNIEXPORT void JNICALL
-Java_com_cheese_assistant_engine_PikafishEngine_nativeGo(JNIEnv*, jobject) {
+Java_com_cheese_assistant_engine_PikafishEngine_nativeGo(JNIEnv*, jobject, jint movetimeMs) {
     if (!g_initialized) return;
     Search::LimitsType limits;
+    // movetime 由引擎自查自停:此前不改 limits 时引擎全功率搜索,
+    // 靠 Java 层在 movetime+3000ms 后才 stop——每次推荐白搜 3 秒
+    if (movetimeMs > 0) limits.movetime = movetimeMs;
     g_engine->go(limits);
 }
 
 JNIEXPORT void JNICALL
 Java_com_cheese_assistant_engine_PikafishEngine_nativeStop(JNIEnv*, jobject) {
     if (g_initialized) g_engine->stop();
+}
+
+// 等上一轮搜索线程真正退出：只有 searchMutex 串行化还不够，native 搜索
+// 线程可能在 stop() 后仍在收尾；下一轮 go 若此时发出会被忽略/串到上一轮
+// 的残留输出（实测同一 root move 以两个 multipv 排名、不同评分出现）。
+JNIEXPORT void JNICALL
+Java_com_cheese_assistant_engine_PikafishEngine_nativeWaitForSearchFinished(JNIEnv*, jobject) {
+    if (g_initialized) g_engine->wait_for_search_finished();
 }
 
 JNIEXPORT jstring JNICALL
@@ -201,6 +226,7 @@ Java_com_cheese_assistant_engine_PikafishEngine_nativeQuit(JNIEnv*, jobject) {
     g_engine->wait_for_search_finished();
     g_engine.reset();
     g_initialized = false;
+    g_networkReady.store(false);
 }
 
 }  // extern "C"

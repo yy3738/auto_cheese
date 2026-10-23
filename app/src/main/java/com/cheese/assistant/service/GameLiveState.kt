@@ -31,6 +31,10 @@ object GameLiveState {
     @Volatile var candidateLines: List<String> = emptyList()
         private set
 
+    /** 实况页在前景: 盖住棋盘期间识别循环应暂停(它读到的是实况页
+     *  自己渲染的盘, 2026-10-21 实测引发"黑车识别不出来") */
+    @Volatile var livePageOpen: Boolean = false
+
     fun update(fen: String, moveLines: List<String>, replayFen: String, match: Boolean?) {
         this.fen = fen
         this.moveLines = moveLines

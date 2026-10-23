@@ -1,18 +1,21 @@
 package com.cheese.assistant.recognize
 
 import android.graphics.Bitmap
-import com.cheese.assistant.board.Piece
 import com.cheese.assistant.board.Position
 import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
- * 棋盘识别 v2：24x24 灰度窗口 + 中心圆掩码归一化 + NCC 平移搜索最近邻。
- * 判空：窗口灰度标准差（棋子方差大、空木纹方差小，PC 验证占用>=39.8 空位<=25.4）。
- * 红黑：暗像素 (R-G) 均值硬门（红 65-82 / 黑 7-30 / 空 25-27，>40 只配红方模板）。
+ * 棋盘识别门面（Facade）：对外签名不变（Result/recognize），
+ * 内部委托 RecognizerEngine 策略实现（NCC/CNN 由工厂选择）。
+ * 线吸附（GridRefiner）属于前处理，统一在此完成。
+ *
+ * NCC 时代的历史：24x24 灰度窗口 + 中心圆掩码归一化 + NCC 平移搜索，
+ * 判空/红黑硬门等细节已随 NccEngine 迁移（Features 保留于本文件）。
  */
 object BoardRecognizer {
 
+    // NCC 引擎调参常量（NccEngine 引用；保留原位避免散落）
     /** 窗口灰度标准差低于该值判空 */
     const val SD_MIN = 32f
 
@@ -37,7 +40,11 @@ object BoardRecognizer {
     class Result(
         val position: Position,
         val unknown: BooleanArray,
+        /** 逐格分层置信（CNN 主路才有意义；NCC 全 CONFIDENT/UNKNOWN 二值） */
+        val confidence: Array<EngineResult.Confidence>,
         val matrixText: String,
+        /** 逐格数值 margin(0-1); null=引擎不提供 */
+        val margins: FloatArray? = null,
     ) {
         val fen: String get() = position.toFen()
         val hasUnknown: Boolean get() = unknown.any { it }
@@ -46,60 +53,35 @@ object BoardRecognizer {
     fun recognize(bmp: Bitmap, rawGrid: BoardGrid, templates: TemplateStore): Result {
         // 线吸附：先让 90 个交叉点贴合实际棋盘线再匹配
         val grid = GridRefiner.refine(bmp, rawGrid)
-        val tmpl = templates.entries
-            .filter { it.bitmap.width == Features.T && it.bitmap.height == Features.T }
-            .map { it.piece to Features.of(it.bitmap) }
+        val engine = RecognizerEngineFactory.resolve(templates)
+        val er = engine.recognize(bmp, grid)
 
-        val radius = grid.cellSize * 0.48f
-        val board = arrayOfNulls<Piece>(90)
         val unknown = BooleanArray(90)
-        val debug = StringBuilder()
-
         for (i in 0 until 90) {
-            val row = i / 9; val col = i % 9
-            val feat = Features.ofBmp(bmp, grid.x(row, col), grid.y(row, col), radius)
-            // 光圈下用抬高阈值判空:空位+光圈 std≈35 被挡住,棋子+光圈 std≈60 照常识别
-            val glow = feat.whiteRatio > GLOW_RATIO_MIN
-            val sdGate = if (glow) GLOW_SD_MIN else SD_MIN
-            if (feat.std < sdGate) continue
-            if (tmpl.isEmpty()) { unknown[i] = true; continue }
-            var bestPiece = "EMPTY"; var bestDist = Float.MAX_VALUE
-            for ((name, tf) in tmpl) {
-                // 硬门：红方查询只配红方模板，其余只配黑方+EMPTY
-                if (feat.redness > REDNESS_GATE) {
-                    if (!name.startsWith("R_")) continue
-                } else if (name.startsWith("R_")) continue
-                val d = Features.dist(feat, tf)
-                if (d < bestDist) { bestDist = d; bestPiece = name }
-            }
-            // 光圈活跃点收紧 unknown 门槛:残缺结构宁可判不明(整帧重试)
-            // 也不要误配成同色棋子污染锚点(锚点错→恢复帧被当 implausible→风暴)
-            if (bestDist > (if (glow) GLOW_UNKNOWN_DIST else UNKNOWN_DIST)) {
-                unknown[i] = true
-                debug.append("($row,$col) d=$bestDist  ")
-                if (col == 2) debug.append('\n')
-                continue
-            }
-            if (bestPiece != "EMPTY") board[i] = Piece.valueOf(bestPiece)
+            unknown[i] = er.confidence[i] == EngineResult.Confidence.UNKNOWN
         }
-
-        val sb = StringBuilder()
-        for (r in 0 until 10) {
-            val cells = (0 until 9).joinToString(" ") { i ->
-                val idx = r * 9 + i
-                if (unknown[idx]) "？" else board[idx]?.cnName ?: "・"
-            }
-            sb.append(r).append(' ').append(cells).append('\n')
-        }
-        if (debug.isNotEmpty()) sb.append("— 未定点 —\n").append(debug)
-        return Result(Position(board, true), unknown, sb.toString())
+        // EngineResult.board 直接就是 Position 所需草稿（null=空/未知）
+        val position = Position(er.board, true)
+        // 影子对照已停用(2026-10-20/21): NCC 按"替换"决策不再参与任何
+        // 运行/诊断路径, 只留在 NccEngine.kt 备查
+        return Result(position, unknown, er.confidence, er.matrixText, er.margins)
     }
+
+    /** NCC 兜底来源（当前未启用：主路为 CNN 纯引擎，拒判交由锚点仲裁） */
+    @Volatile
+    var nccRecoverEngine: ((TemplateStore) -> NccEngine)? = null
 }
 
 /**
- * 特征：T x T 灰度零均值单位方差归一化（中心圆掩码）+ 窗口标准差 + redness。
- * 与 PC 端 tools/proto_recognize.py v2 一致。
+ * 影子对照观察者：已停用（2026-10-20，NCC 按"替换"决策退出全部运行/诊断
+ * 路径）。保留空壳对象避免调用点逐一改动；offerAsync 直接返回。
  */
+object ShadowObserver {
+
+    /** 空操作：影子已停用 */
+    fun offerAsync(bmp: Bitmap, grid: BoardGrid, primary: RecognizerEngine,
+                   primaryResult: EngineResult) = Unit
+}
 object Features {
 
     const val T = 24

@@ -22,3 +22,24 @@ Thumbs.db
 .kotlin/
 
 samples/*
+# 排障/收割临时产物（2026-10-19 大清洗后防复发）
+_*.png
+_*.txt
+_*.log
+dumps_*/
+dumps_*.tar
+screenshot_*.png
+tools/_*.txt
+tools/out/*.pt
+# 2026-10-23 整理：临时排障/设备数据/分析产物
+_*.xml
+_*.json
+ud*.xml
+_dlive/
+_dstorm/
+tools/out/*.png
+tools/out/*.onnx
+tools/out/*.csv
+tools/out/*.log
+tools/out/*.txt
+tools/out/*_old.json

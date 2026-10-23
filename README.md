@@ -8,11 +8,14 @@
 
 ## 功能一览（全部实机验证通过）
 
-- **实战悬浮助手**：MediaProjection 截屏 → 校准式模板识别（NCC）→
-  方向归一化 → 走子校验 → 引擎分析 → 悬浮窗口显示
-  「X方回合 + 三条候选」，打吃/将军用「吃」「将」徽章醒目标出
+- **实战悬浮助手**：MediaProjection 截屏 → 校准式定位 → **CNN 主路逐格
+  识别（MobileNetV3-Small@128 + ONNX Runtime）** → 方向归一化 → 仲裁/走子
+  校验 → 引擎分析 → 悬浮窗口显示「X方回合 + 三条候选」，打吃/将军用
+  「吃」「将」徽章醒目标出
 - **防卡死架构**：识别循环整层兜底、引擎搜索互斥、非法局面拦截、
   光圈脉动/幽灵步等误识别在循环层容忍修复（识别层永远追不上动画）
+- **中途加入**：切到进行中的对局即可接手，不需要新开一局；重装后旧棋谱
+  自动清盘（安装事件）
 - **结 → 复盘 → 下一局闭环**：对局中点「结」封存入库 → 逐局面深搜复盘
   打分（失误/大漏着）→ 朱红「下一局」一键开新局
 - **知识库**：Zobrist 局面指纹 + Room 持久化，复盘过的局面再次出现直接秒回
@@ -32,8 +35,8 @@ gradle assembleDebug        # NNUE 权重 ~50MB 已打包在 app/src/main/assets
 
 ## 30 秒上手
 
-1. 主界面点右下朱红圆钮「开始实战辅助」→ 授予截屏权限 → **回主界面再点一次**
-   （授权后会失效一次，再点才真正启动）
+1. 主界面点右下朱红圆钮「开始实战辅助」→ 首次按提示授予「使用情况访问」
+   与截屏权限 → **授权成功即自动启动**，无需再点一次
 2. 首次使用先点「校准」：3 秒内切到目标棋盘 App，标定棋盘四角
 3. 切到 JJ 象棋对局，悬浮窗自动出推荐；走完一局点「结」复盘
 
@@ -48,6 +51,8 @@ gradle assembleDebug        # NNUE 权重 ~50MB 已打包在 app/src/main/assets
 | [docs/usage.md](docs/usage.md) | 使用文档：完整操作流程 + 排障 |
 | [docs/features-and-roadmap.md](docs/features-and-roadmap.md) | 功能清单与路线图（需求口径） |
 | [docs/development-lessons.md](docs/development-lessons.md) | 开发对话中沉淀的工程经验 |
+| [docs/recurring-issues.md](docs/recurring-issues.md) | 复发问题登记册（症状→病因速查，排障先看） |
+| [docs/charcnn-upgrade.md](docs/charcnn-upgrade.md) | CNN 迁移设计与数据标注口径 |
 | [docs/overlay-auto-recognize-status.md](docs/overlay-auto-recognize-status.md) | 自动识别排查史（归档） |
 | [CONTEXT.md](CONTEXT.md) | 领域语言与概念定义 |
 | [docs/adr/](docs/adr/) | 架构决策记录（引擎选型/模板匹配/知识库） |
@@ -56,5 +61,6 @@ gradle assembleDebug        # NNUE 权重 ~50MB 已打包在 app/src/main/assets
 
 Kotlin + 协程；Pikafish(UCI) 经 JNI 直驱，NNUE 64MiB 来自
 [官方 Networks](https://github.com/official-pikafish/Networks/releases)；
-MediaProjection + ImageReader 抓帧；NCC 模板匹配识别（OpenCV 原型验证后
-纯 Kotlin 移植）；Room + Zobrist 知识库。
+MediaProjection + ImageReader 抓帧；**MobileNetV3-Small@128 + ONNX Runtime
+Mobile** 逐格分类（ImageNet 预训练微调，约 2500 张标注样本）；Room + Zobrist
+知识库。

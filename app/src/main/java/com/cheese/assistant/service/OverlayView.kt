@@ -14,9 +14,9 @@ import android.widget.TextView
 
 /**
  * 悬浮窗信息条：蓝白主题卡片。
- * 版式：藏蓝实底标题栏(拖动+执方+结/下一局+关闭,白字) → 上一手行
- * → 推荐列表(序号徽章;打吃=藏蓝「吃」圆牌+着法藏蓝加粗,将军=朱红「将」圆牌
- * +着法朱红加粗) → 降级状态行(琥珀提示+重试)。
+ * 版式：藏蓝实底标题栏(拖动+执方+局前「开局」/局中「纠/实」+结/下一局+
+ * 关闭,白字) → 上一手行 → 推荐列表(序号徽章;打吃=藏蓝「吃」圆牌+着法
+ * 藏蓝加粗,将军=朱红「将」圆牌+着法朱红加粗) → 降级状态行(琥珀提示+重试)。
  * 支持收起为小圆点：轮到你=藏蓝实心,对手回合=灰白描边,点击切换。
  */
 @SuppressLint("ViewConstructor")
@@ -43,7 +43,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
         text = "弈枰"
         setTextColor(0xFFFFFFFF.toInt())
         setTypeface(Typeface.SERIF, Typeface.BOLD)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         letterSpacing = 0.15f
         gravity = Gravity.CENTER_VERTICAL
     }
@@ -52,9 +52,9 @@ class OverlayView(context: Context) : LinearLayout(context) {
     private val sideButton = TextView(context).apply {
         text = "红"
         setTextColor(0xFFFFFFFF.toInt())
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         gravity = Gravity.CENTER
-        setPadding(dp(10), dp(2), dp(10), dp(2))
+        setPadding(dp(8), dp(1), dp(8), dp(1))
         background = pill(0x33FFFFFF)
     }
 
@@ -62,48 +62,71 @@ class OverlayView(context: Context) : LinearLayout(context) {
     private val sealButton = TextView(context).apply {
         text = "结"
         setTextColor(colorNavy)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         gravity = Gravity.CENTER
-        setPadding(dp(11), dp(2), dp(11), dp(2))
+        setPadding(dp(9), dp(1), dp(9), dp(1))
         background = pill(0xFFFFFFFF)
     }
 
     private val closeButton = TextView(context).apply {
         text = "✕"
         setTextColor(0xB3FFFFFF.toInt())
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         gravity = Gravity.CENTER
-        setPadding(dp(11), dp(2), dp(11), dp(2))
+        setPadding(dp(9), dp(1), dp(9), dp(1))
     }
 
-    /** 实况页入口:♟ 图标(对局实况——棋谱/推荐/识别对照) */
+    /** 实况页入口（局中显示）：单字「实」，与「结」同排 */
     private val liveButton = TextView(context).apply {
-        text = "♟"
+        text = "实"
         setTextColor(0xFFFFFFFF.toInt())
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         gravity = Gravity.CENTER
-        setPadding(dp(4), dp(2), dp(4), dp(2))
+        setPadding(dp(9), dp(1), dp(9), dp(1))
+        background = pill(0x33FFFFFF)
+        visibility = GONE
+    }
+
+    /** 纠错入口（局中显示）：单字「纠」，与「结」同排 */
+    private val correctButton = TextView(context).apply {
+        text = "纠"
+        setTextColor(0xFFFFFFFF.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        gravity = Gravity.CENTER
+        setPadding(dp(9), dp(1), dp(9), dp(1))
+        background = pill(0x33FFFFFF)
+        visibility = GONE
+    }
+
+    /** 开局入口（局前显示）：与「结」并排；点后立即消失，换成「纠/实」 */
+    private val newGameButton = TextView(context).apply {
+        text = "开局"
+        setTextColor(0xFFFFFFFF.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        gravity = Gravity.CENTER
+        setPadding(dp(8), dp(1), dp(8), dp(1))
+        background = pill(0x44FFFFFF)
     }
 
     /** 上一手:推荐区顶部常驻,降级时保持可见作为局面锚点 */
     private val lastMoveView = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
         setTextColor(colorTextSecondary)
-        setPadding(dp(14), 0, dp(14), 0)
+        setPadding(dp(10), 0, dp(10), 0)
         visibility = View.GONE
     }
 
     /** 推荐列表:每行"徽章+着法" */
     private val suggestionContainer = LinearLayout(context).apply {
         orientation = VERTICAL
-        setPadding(dp(8), dp(4), dp(8), dp(8))
+        setPadding(dp(6), dp(2), dp(6), dp(4))
     }
 
     /** 降级状态行:识别不可信时显示(琥珀提示+重触发按钮),正常时隐藏 */
     private val degradedRow = LinearLayout(context).apply {
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(14), dp(4), dp(14), dp(8))
+        setPadding(dp(10), dp(2), dp(10), dp(4))
         visibility = View.GONE
         background = GradientDrawable().apply {
             cornerRadius = dp(10).toFloat()
@@ -112,17 +135,17 @@ class OverlayView(context: Context) : LinearLayout(context) {
     }
 
     private val degradedText = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
         setTextColor(colorAmber)
-        setPadding(0, 0, dp(10), 0)
+        setPadding(0, 0, dp(8), 0)
     }
 
     private val retriggerButton = TextView(context).apply {
         text = "重试识别"
         setTextColor(colorAmber)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
         gravity = Gravity.CENTER
-        setPadding(dp(10), dp(4), dp(10), dp(4))
+        setPadding(dp(8), dp(3), dp(8), dp(3))
         background = outline(colorAmber)
         setOnClickListener { onRetrigger?.invoke() }
     }
@@ -155,15 +178,17 @@ class OverlayView(context: Context) : LinearLayout(context) {
         handleBar = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(6), dp(8), dp(6))
+            setPadding(dp(10), dp(4), dp(6), dp(4))
             background = headerShape()
+            fun btnLp() = LinearLayout.LayoutParams(
+                LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
+                .apply { setMargins(dp(4), 0, dp(4), 0) }
             addView(titleView, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-            addView(sideButton)
-            addView(space(dp(4)))
-            addView(liveButton)
-            addView(space(dp(4)))
-            addView(sealButton)
-            addView(space(dp(5)))
+            addView(sideButton, btnLp())
+            addView(newGameButton, btnLp())
+            addView(correctButton, btnLp())
+            addView(liveButton, btnLp())
+            addView(sealButton, btnLp())
             addView(closeButton)
         }
 
@@ -182,6 +207,18 @@ class OverlayView(context: Context) : LinearLayout(context) {
             LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.CENTER
         })
+        setGameStarted(false)
+    }
+
+    /**
+     * 标题栏状态切换：
+     * - 局前：`开局 | 结`（纠/实隐藏）
+     * - 局中：`纠 | 实 | 结`（开局隐藏）
+     */
+    fun setGameStarted(started: Boolean) {
+        newGameButton.visibility = if (started) GONE else VISIBLE
+        correctButton.visibility = if (started) VISIBLE else GONE
+        liveButton.visibility = if (started) VISIBLE else GONE
     }
 
     /** 标题栏藏蓝底要盖住卡片圆角外的直角:圆角只有顶部两角 */
@@ -192,10 +229,6 @@ class OverlayView(context: Context) : LinearLayout(context) {
             dp(15).toFloat(), dp(15).toFloat(),
             dp(15).toFloat(), dp(15).toFloat(),
             0f, 0f, 0f, 0f)
-    }
-
-    private fun space(px: Int): View = View(context).also {
-        it.layoutParams = LinearLayout.LayoutParams(px, 1)
     }
 
     // ---- 收起/展开 ----
@@ -309,7 +342,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
     fun showNextGameMode() {
         sealButton.text = "下一局"
         sealButton.setTextColor(0xFFFFFFFF.toInt())
-        sealButton.setPadding(dp(12), dp(3), dp(12), dp(3))
+        sealButton.setPadding(dp(10), dp(2), dp(10), dp(2))
         sealButton.background = pill(colorVermillion.toLong())
     }
 
@@ -317,7 +350,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
     fun showReviewingMode() {
         sealButton.text = "复盘中"
         sealButton.setTextColor(0xFFFFFFFF.toInt())
-        sealButton.setPadding(dp(12), dp(3), dp(12), dp(3))
+        sealButton.setPadding(dp(10), dp(2), dp(10), dp(2))
         sealButton.background = pill(colorNavySoft.toLong())
     }
 
@@ -325,7 +358,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
     fun resetSealButton() {
         sealButton.text = "结"
         sealButton.setTextColor(colorNavy)
-        sealButton.setPadding(dp(11), dp(2), dp(11), dp(2))
+        sealButton.setPadding(dp(9), dp(1), dp(9), dp(1))
         sealButton.background = pill(0xFFFFFFFF)
     }
 
@@ -346,6 +379,16 @@ class OverlayView(context: Context) : LinearLayout(context) {
     /** ♟ 按钮 → 跳转对局实况页 */
     fun setOnLiveListener(listener: () -> Unit) {
         liveButton.setOnClickListener { listener() }
+    }
+
+    /** 纠错按钮 → 四下拉输入一手棋 */
+    fun setOnCorrectListener(listener: () -> Unit) {
+        correctButton.setOnClickListener { listener() }
+    }
+
+    /** 开局按钮 → 以当前盘面为新局起点 */
+    fun setOnNewGameListener(listener: () -> Unit) {
+        newGameButton.setOnClickListener { listener() }
     }
 
     fun setOnSideToggleListener(listener: (Boolean) -> Unit) {
@@ -404,20 +447,20 @@ class OverlayView(context: Context) : LinearLayout(context) {
         val row = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(6), dp(3), dp(6), dp(3))
+            setPadding(dp(4), dp(2), dp(4), dp(2))
         }
         val isCheck = threat == ThreatLevel.CHECK
         val isCapture = threat == ThreatLevel.CAPTURE
         val isThreatCheck = threat == ThreatLevel.THREAT_CHECK
         val isThreatCapture = threat == ThreatLevel.THREAT_CAPTURE
         val badge = TextView(context).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             setTypeface(Typeface.DEFAULT_BOLD)
             gravity = Gravity.CENTER
         }
-        val size = dp(22)
+        val size = dp(20)
         badge.layoutParams = LinearLayout.LayoutParams(size, size).apply {
-            marginEnd = dp(8)
+            marginEnd = dp(6)
         }
         badge.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
@@ -454,7 +497,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
         row.addView(badge)
         row.addView(TextView(context).apply {
             text = moveText
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             when {
                 isCheck -> {
                     setTextColor(colorVermillion)
@@ -470,6 +513,15 @@ class OverlayView(context: Context) : LinearLayout(context) {
             }
         })
         return row
+    }
+
+    /** 悬浮窗当前屏幕矩形；未挂载时返回 null（边条指纹采样跳过用） */
+    fun boundsOnScreen(): android.graphics.Rect? {
+        if (!isAttachedToWindow) return null
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        if (width <= 0 || height <= 0) return null
+        return android.graphics.Rect(loc[0], loc[1], loc[0] + width, loc[1] + height)
     }
 
     private fun dp(v: Int): Int =

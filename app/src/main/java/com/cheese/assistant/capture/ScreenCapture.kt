@@ -66,6 +66,10 @@ object ScreenCapture {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             Thread.sleep(quietMs)
+            // 静止画面 ImageReader 不推新帧(fresh=null)属正常: 返回已持有帧。
+            // 投屏真死时 isRunning/上层 credibility 检测兜底, 这里不能
+            // 用 "null 代替 prev"——否则静止界面永远识别失败(2026-10-20
+            // 回归教训: 此处改动让主界面停留即"识别失败")
             val next = captureFresh(timeoutMs = 250) ?: return prev
             if (isSame(prev, next)) return next
             prev = next

@@ -3,6 +3,7 @@ package com.cheese.assistant.engine
 import com.cheese.assistant.util.AppLog
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -17,10 +18,48 @@ data class SearchResult(
 }
 
 /**
+ * 退化搜索结果：引擎首搜抢在 NNUE 就绪前、或上一轮搜索残留状态时，
+ * 会返回深度≤1、单候选、评分 0（且非杀）的随手着法。
+ * 曾导致首推固定「兵九进一 +0.0」。JNI 已等 NNUE 就绪，这里再兜一层。
+ */
+internal fun isDegenerateSearch(r: SearchResult): Boolean {
+    if (r.failed) return false
+    if (r.depth > 1 || r.candidates.size > 1) return false
+    val c = r.candidates.firstOrNull() ?: return true
+    return c.scoreCp == 0 && c.mateIn == null
+}
+
+/**
+ * 同一 root move 只保留一条（深度高者优先，同深度保留排名靠前者）。
+ * 引擎 stop 收尾阶段的残留 info 行曾让同一个 `f0e1 仕四进五` 以
+ * multipv 1/2 两个不同评分同时出现在推荐里（2026-10-22 实测）。
+ */
+internal fun dedupCandidates(list: List<Candidate>): List<Candidate> {
+    if (list.size <= 1) return list
+    val byMove = LinkedHashMap<String, Candidate>()
+    for (c in list) {
+        val move = c.pv.firstOrNull() ?: continue
+        val old = byMove[move]
+        if (old == null) {
+            byMove[move] = c
+            continue
+        }
+        val keepNew = c.depth > old.depth ||
+            (c.depth == old.depth && c.rank < old.rank)
+        AppLog.w("SearchCtl",
+            "duplicate root move $move: rank ${old.rank}/${c.rank} " +
+                "depth ${old.depth}/${c.depth} score ${old.scoreCp}/${c.scoreCp} " +
+                "→ keep ${if (keepNew) "new" else "old"}")
+        if (keepNew) byMove[move] = c
+    }
+    return byMove.values.sortedBy { it.rank }
+}
+
+/**
  * 引擎控制器：管理 Pikafish 生命周期，把一次限时搜索封装为挂起函数。
  */
 class SearchController(
-    private val movetimeMs: Int = 800,
+    private val movetimeMs: Int = 600,
     private val multiPv: Int = 3,
     private val threads: Int = 3,
 ) {
@@ -39,7 +78,30 @@ class SearchController(
         e.nativeSetOption("Threads", "$threads")
         e.nativeSetOption("MultiPV", "$multiPv")
         e.nativeSetOption("Hash", "64")
+        // 预热一次短搜索：NNUE 刚 ready 时首搜仍可能返回 depth1/评分0
+        // （实测 15:31:31 cost=8ms best=a3a4 depth=1），预热后首推才正常
+        runCatching { warmUp(e) }.onFailure {
+            AppLog.e("SearchCtl", "warm-up failed", it)
+        }
         true
+    }
+
+    /** 引擎首搜预热：跑 60ms 开局搜索并丢弃结果，让搜索线程/网络副本就绪 */
+    private fun warmUp(e: PikafishEngine) {
+        val fen = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1"
+        if (!e.nativeSetPosition(fen, emptyArray())) return
+        while (e.nativePollLine(0) != null) Unit
+        val started = System.currentTimeMillis()
+        e.nativeGo(60)
+        val deadline = System.currentTimeMillis() + 3000L
+        while (System.currentTimeMillis() < deadline) {
+            val line = e.nativePollLine(100) ?: continue
+            if (line.startsWith("bestmove")) break
+        }
+        e.nativeStop()
+        e.nativeWaitForSearchFinished()
+        while (e.nativePollLine(0) != null) Unit
+        AppLog.d("SearchCtl", "warm-up done ${System.currentTimeMillis() - started}ms")
     }
 
     private fun copyNnue(context: Context): String {
@@ -61,14 +123,29 @@ class SearchController(
             searchMutex.withLock {
                 e.nativeSetOption("MultiPV", "$multiPv")
                 try {
-                    searchInternal(e, fen, movetime)
+                    searchWithRetry(e, fen, movetime)
                 } finally {
                     e.nativeSetOption("MultiPV", "${this@SearchController.multiPv}")
                 }
             }
         } else {
-            searchMutex.withLock { searchInternal(e, fen, movetime) }
+            searchMutex.withLock { searchWithRetry(e, fen, movetime) }
         }
+    }
+
+    /** 退化结果延迟 300ms 重搜一次；JNI 已等 NNUE 就绪，这里是状态异常兜底。 */
+    private suspend fun searchWithRetry(
+        e: PikafishEngine, fen: String, movetime: Int,
+    ): SearchResult {
+        val first = searchInternal(e, fen, movetime)
+        if (!isDegenerateSearch(first)) return first
+        AppLog.w("SearchCtl",
+            "degenerate search depth=${first.depth} candidates=${first.candidates.size}, retry")
+        delay(300)
+        val second = searchInternal(e, fen, movetime)
+        if (isDegenerateSearch(second))
+            AppLog.w("SearchCtl", "degenerate search again, give up")
+        return second
     }
 
     private suspend fun searchInternal(
@@ -76,6 +153,10 @@ class SearchController(
         fen: String,
         movetime: Int,
     ): SearchResult = withContext(Dispatchers.Default) {
+        // 等上一轮搜索线程真正退出，再清队列/设局面。只靠 searchMutex
+        // 串行化 Kotlin 调用不够：stop 后 native 线程仍在收尾，残留
+        // info 行会串进本轮（实测同 root move 两个 multipv 评分）。
+        e.nativeWaitForSearchFinished()
         // Pikafish 在缺王局面会触发断言 abort,必须先把关
         val boardPart = fen.substringBefore(' ')
         if (boardPart.count { it == 'K' } != 1 || boardPart.count { it == 'k' } != 1) {
@@ -95,7 +176,8 @@ class SearchController(
         while (e.nativePollLine(0) != null) Unit
 
         val startedAt = System.currentTimeMillis()
-        e.nativeGo()
+        // 引擎自查自停(movetime);宽限 3s 等 bestmove 补发
+        e.nativeGo(movetime)
 
         val deadline = System.currentTimeMillis() + movetime + 3000L
         while (System.currentTimeMillis() < deadline) {
@@ -139,6 +221,8 @@ class SearchController(
             }
         }
         e.nativeStop()
+        // 等收尾线程退出，下一轮 start 的 wait 才真正干净
+        e.nativeWaitForSearchFinished()
 
         val cost = System.currentTimeMillis() - startedAt
         when {
@@ -146,10 +230,14 @@ class SearchController(
                 AppLog.w("SearchCtl", "no bestmove fen=[${fen.take(24)}…] cost=${cost}ms")
             cost > movetime + 2000L ->
                 AppLog.w("SearchCtl", "slow search cost=${cost}ms movetime=$movetime best=${bestMove.take(8)}")
+            // 远快于 movetime 的搜索多半是残留输出/引擎未真正开搜，留证
+            cost < movetime / 2 ->
+                AppLog.w("SearchCtl", "fast search cost=${cost}ms best=${bestMove.take(8)} " +
+                    "depth=$maxDepth cands=${byRank.size}")
         }
 
         SearchResult(
-            candidates = byRank.values.sortedBy { it.rank },
+            candidates = dedupCandidates(byRank.values.sortedBy { it.rank }),
             bestMove = bestMove,
             depth = maxDepth,
         )

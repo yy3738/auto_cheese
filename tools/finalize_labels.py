@@ -71,5 +71,7 @@ for parts in tsv:
 print(f"标签 {fixed} 修正,自动 {kept-fixed} 归档,模糊跳过 {skipped}")
 print(f"数据集: {ds}")
 for cls in sorted(os.listdir(ds)):
+    if not os.path.isdir(os.path.join(ds, cls)):
+        continue
     n = len(os.listdir(os.path.join(ds, cls)))
     print(f"  {cls:12s} {n}")
