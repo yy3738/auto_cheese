@@ -8,6 +8,8 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.graphics.PixelFormat
 import android.os.IBinder
 import android.widget.Toast
@@ -133,7 +135,14 @@ class AssistantService : Service() {
         AppLog.start(this)
         AppLog.i("AssistantService", "service created")
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // Android 10+ 必须带 mediaProjection 类型；Android 14 起没有它
+        // getMediaProjection() 会直接 SecurityException（真机闪退根因之一）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, buildNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
         isRunning = true
         // 引擎/NNUE 预热：用户授权投屏、切回 JJ 的这段时间里先把 64MiB
         // 权重加载完，避免「点开局后首推等十几秒」（2026-10-22 实测 12s）
@@ -173,6 +182,23 @@ class AssistantService : Service() {
             Action.START_AUTO -> {
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putBoolean(PREF_AUTO_ON, true).apply()
+                // 授权页把 MediaProjection 结果交到这里：服务 onCreate 已
+                // startForeground(mediaProjection)，此刻再创建投屏才合法
+                // （2026-10-26 Android 14+ 真机闪退修复）
+                val rc = intent.getIntExtra(Extra.PROJECTION_RESULT_CODE, Int.MIN_VALUE)
+                @Suppress("DEPRECATION")
+                val projData = intent.getParcelableExtra<Intent>(Extra.PROJECTION_DATA)
+                if (rc != Int.MIN_VALUE && projData != null) {
+                    runCatching { ScreenCapture.start(this, rc, projData) }
+                        .onFailure {
+                            AppLog.e("AssistantService", "projection start failed", it)
+                            android.os.Handler(mainLooper).post {
+                                android.widget.Toast.makeText(this,
+                                    "投屏启动失败：${it.javaClass.simpleName} ${it.message}",
+                                    android.widget.Toast.LENGTH_LONG).show()
+                            }
+                        }
+                }
                 // 2026-10-23 用户要求：没点「开局」不识别、不提示识别不稳定。
                 // 授权后只亮悬浮窗等开局；识别循环在「开局」/重试时才启动。
                 // 进程中途恢复且棋谱已有走子 → 仍要自动续上。
@@ -219,6 +245,10 @@ class AssistantService : Service() {
         serviceScope.cancel()
         controller?.shutdown()
         controller = null
+        // 投屏属于本次服务会话：停止服务必须释放，否则 ScreenCapture.isRunning
+        // 是假状态，下次启动会拿着已失效的 MediaProjection 空转（Android 14
+        // 停止前台服务后投屏随即失效）。释放后下次开启会重新走授权。
+        runCatching { ScreenCapture.stop() }
         super.onDestroy()
     }
 
@@ -1870,5 +1900,8 @@ class AssistantService : Service() {
 
     object Extra {
         const val FEN = "fen"
+        /** 授权页转交的 MediaProjection 结果（Android 14+ 必须先有前台服务） */
+        const val PROJECTION_RESULT_CODE = "projectionResultCode"
+        const val PROJECTION_DATA = "projectionData"
     }
 }

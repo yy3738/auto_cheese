@@ -195,6 +195,21 @@
             android:paddingEnd="6dp"
             android:textSize="12sp"
             android:text="@string/recognize" />
+
+        <Button
+            android:id="@+id/btnExportLogs"
+            style="@style/ChessBtn"
+            android:background="@null"
+            android:backgroundTint="@null"
+            android:textColor="@color/ink_soft"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:textSize="12sp"
+            android:text="导出日志" />
     </LinearLayout>
 
     <!-- FEN:上细线 + 等宽小字 -->

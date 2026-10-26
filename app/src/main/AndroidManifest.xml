@@ -11,6 +11,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
+        android:name=".CheeseApp"
         android:label="象棋助手"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.CheeseAssistant"

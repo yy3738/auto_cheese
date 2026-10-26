@@ -68,6 +68,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnAnalyze.setOnClickListener { analyze() }
+        findViewById<Button>(R.id.btnExportLogs).setOnClickListener { exportLogs() }
         findViewById<Button>(R.id.btnLive).setOnClickListener {
             startActivity(Intent(this, com.cheese.assistant.ui.LiveGameActivity::class.java))
         }
@@ -134,6 +135,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        updateOverlayButton()
         com.cheese.assistant.recognize.RecognizeActivity.lastApplied?.let { pos ->
             boardView.position = pos
             fenView.setText(pos.toFen())
@@ -178,15 +180,26 @@ class MainActivity : AppCompatActivity() {
         }
         if (AssistantService.isRunning) {
             startService(overlayIntent(AssistantService.Action.STOP, ""))
+            Toast.makeText(this, "已停止实战辅助（再次开启需重新授权截屏）",
+                Toast.LENGTH_LONG).show()
+            updateOverlayButton()
             return
         }
         if (!com.cheese.assistant.capture.ScreenCapture.isRunning) {
             startActivity(Intent(this, com.cheese.assistant.capture.CapturePermissionActivity::class.java))
-            Toast.makeText(this, "授权后请再点一次此按钮", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "请完成截屏授权（授权后悬浮窗会自动出现）",
+                Toast.LENGTH_LONG).show()
             return
         }
         startService(overlayIntent(AssistantService.Action.START_AUTO, ""))
         Toast.makeText(this, "悬浮窗已开启，切到对局后点「开局」开始记账", Toast.LENGTH_LONG).show()
+    }
+
+    /** 主按钮跟随服务状态：运行中显示「停止」，否则「开始」 */
+    private fun updateOverlayButton() {
+        val running = AssistantService.isRunning
+        findViewById<Button>(R.id.btnOverlay).text =
+            if (running) "停止\n实战辅助" else "开始\n实战辅助"
     }
 
     private fun overlayIntent(action: String, fen: String): Intent =
@@ -194,6 +207,53 @@ class MainActivity : AppCompatActivity() {
             this.action = action
             putExtra(AssistantService.Extra.FEN, fen)
         }
+
+    /**
+     * 导出日志到公共「下载」目录（2026-10-26，真机无法 adb 时排障用）：
+     * 把 files/logs 下的会话日志逐份复制到 Download/象棋助手日志/，
+     * 用户可直接把这个文件夹发给开发者。API 29+ 走 MediaStore，无需存储权限。
+     */
+    private fun exportLogs() {
+        val dir = java.io.File(filesDir, "logs")
+        val logs = dir.listFiles { f -> f.isFile && f.name.endsWith(".log") }
+            ?.sortedBy { it.name } ?: emptyList()
+        if (logs.isEmpty()) {
+            Toast.makeText(this, "暂无日志", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val stamp = java.text.SimpleDateFormat("MMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date())
+        var saved = 0
+        for (f in logs) {
+            val name = "chesslog-$stamp-${f.name}"
+            val ok = runCatching {
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    val values = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
+                        put(android.provider.MediaStore.Downloads.MIME_TYPE, "text/plain")
+                        put(android.provider.MediaStore.Downloads.RELATIVE_PATH,
+                            android.os.Environment.DIRECTORY_DOWNLOADS + "/象棋助手日志")
+                    }
+                    val uri = contentResolver.insert(
+                        android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                        ?: return@runCatching false
+                    contentResolver.openOutputStream(uri)?.use { out ->
+                        f.inputStream().use { it.copyTo(out) }
+                    }
+                } else {
+                    val outDir = java.io.File(getExternalFilesDir(null), "logs-export")
+                        .apply { mkdirs() }
+                    f.copyTo(java.io.File(outDir, name), overwrite = true)
+                }
+                true
+            }.getOrDefault(false)
+            if (ok) saved++
+        }
+        val where = if (android.os.Build.VERSION.SDK_INT >= 29)
+            "下载/象棋助手日志" else "Android/data/com.cheese.assistant/files/logs-export"
+        Toast.makeText(this, "已导出 $saved 份日志到 $where，请把整个文件夹发我",
+            Toast.LENGTH_LONG).show()
+    }
 
     private fun analyze() {
         val ctl = controller

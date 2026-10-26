@@ -336,3 +336,14 @@
     改成：只有整帧与棋谱的差异**全部**是同兵种异色才纠；出现变空/多子
     （走子/吃子的特征）一律放弃。通用纪律：按旧状态修新观测前，先确认
     新观测里没有走子差异。
+
+63. **Android 14 的 MediaProjection 三条硬要求**（2026-10-26 真机闪退）：
+    ① 必须先有 `foregroundServiceType="mediaProjection"` 的前台服务并
+    `startForeground(..., FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)`，
+    再调 `getMediaProjection()`——否则点「立即开始」直接 SecurityException；
+    ② `createVirtualDisplay()` 之前必须注册 `MediaProjection.Callback`，
+    否则 IllegalStateException；③ 停止前台服务后投屏随即失效，`onDestroy`
+    必须 `ScreenCapture.stop()`，否则 `isRunning` 是假状态，下次启动拿着
+    失效的投影空转（表现为"校准了也不出推荐"）。
+    另外主圆钮是开关，运行中再点会**停止**服务——必须给提示并把按钮文字
+    切到「停止实战辅助」，否则用户以为坏了。

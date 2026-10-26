@@ -276,3 +276,20 @@ UCI 层做的初始化（startTime / 合法局面 / 选项），否则引擎行�
 
 **纪律**：任何"按旧状态修正新观测"的逻辑，先问"新观测里有没有走子差异"——
 有走子就说明旧状态已过期，不能拿它改。
+
+## 18. Android 14 真机点「立即开始」闪退 / 之后识别不出（2026-10-26）
+
+**症状**：Android 14 手机授权录屏，点「立即开始」后闪退；或服务停止后再
+开启，悬浮窗在但永远不给推荐。
+
+**病因**（代码级）：
+1. `CapturePermissionActivity` 在**前台服务启动前**调 `getMediaProjection()`
+   —— Android 14 要求先有 mediaProjection 类型 FGS，否则 SecurityException；
+2. `createVirtualDisplay` 前未注册 `MediaProjection.Callback` → IllegalStateException；
+3. 服务 `onDestroy` 未调用 `ScreenCapture.stop()` → `isRunning` 假状态，
+   下次启动复用已失效的投影，识别循环拿不到帧（"校准了也不出"）；
+4. 主圆钮是开/关切换，运行中点击是**停止**且无提示，容易误判成故障。
+
+**修复**：授权页只转交 `resultCode+data`，服务在自己的 FGS 生命周期里创建
+投屏；注册回调；`onDestroy` 释放投屏；按钮文字跟随状态 + 停止 Toast；
+投屏失败弹 Toast 并落日志。

@@ -77,12 +77,25 @@ object ScreenCapture {
         projection = mgr.getMediaProjection(resultCode, data)
 
         handlerThread = HandlerThread("ScreenCapture").also { it.start() }
+        val handler = Handler(handlerThread!!.looper)
+        // Android 14+：createVirtualDisplay 之前必须注册回调，否则
+        // IllegalStateException（真机闪退根因之二，模拟器 Android 9 不报）
+        projection!!.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                AppLog.w("ScreenCapture", "MediaProjection stopped by system/user")
+                runCatching {
+                    virtualDisplay?.release(); virtualDisplay = null
+                    imageReader?.close(); imageReader = null
+                    handlerThread?.quitSafely(); handlerThread = null
+                    projection = null
+                }
+            }
+        }, handler)
         imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
         virtualDisplay = projection!!.createVirtualDisplay(
             "cheese_capture", width, height, metrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface, null,
-            Handler(handlerThread!!.looper))
+            imageReader!!.surface, null, handler)
     }
 
     // ---- 细胞状态流 ----
