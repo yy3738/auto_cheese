@@ -123,6 +123,9 @@ class LiveGameActivity : AppCompatActivity() {
         // 画识别直读盘。旧策略"永远以棋谱为准"在棋谱被幽灵步污染后
         // 会画出"黑 车凭空消失"的假盘(实测左上角黑车消失)
         if (manualEdited || editScheduled) return
+        // 永远"我执子在下"：执黑时上下翻转（用户 2026-10-23 要求；
+        // 只翻行不翻列，与 JJ 执黑时的显示一致）
+        boardView.flipped = !GameLiveState.userIsRed
         val trusted = GameLiveState.match == true
         val fenForBoard = if (trusted) GameLiveState.replayFen.ifEmpty { GameLiveState.fen }
                           else GameLiveState.fen

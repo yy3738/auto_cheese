@@ -1,7 +1,18 @@
 # 快棋识别与记录优化计划
 
-> 状态：**待评审，不执行**。基线 commit `7290933`（feature-cnn，已推送）。
-> 创建 2026-10-23。目标：快速连走不丢步、识别不卡、开局首推不再等十几秒。
+> 状态：**S1a + S1b 已实现，待实机标定**（2026-10-23）。基线 commit `7290933`
+> （feature-cnn，已推送）。目标：快速连走不丢步、识别不卡、开局首推不再等十几秒。
+>
+> 实现落点：
+> - S1a：`MoveCheck.canDropOverCap`（暖格不删）/ `MoveCheck.rejectStaticOrigin`
+>   （origin 木色首帧判定）/ `OverlayView.setReviewProgress`（复盘 X/Y）
+> - S1b：`capture/CellStream.kt`（`CellSampler` 逐帧细胞状态 + `MotionTracker`
+>   动画状态机）/ `ScreenCapture.startCellStream|pollSettle`（监听式采集、
+>   落定帧入队）/ `BoardWatcher` 落定帧直识别、`close()` 停流
+> - 单测：`MotionTrackerTest`、`OverCapWarmthTest`
+> - 静态画面不推帧：`MotionTracker.tick` + 采集侧预转落定帧（`pendingSettle`）
+> - 待标定：用实机 `ScreenCapture: settle ...` 日志（movingMs/plateaus/cells）
+>   校准 `PLATEAU_MS=80` / `SETTLE_MS=160`；S2 起用窗口做 1-4 步还原。
 
 ## 一、问题与数据（全部来自实机日志）
 
@@ -245,11 +256,14 @@ loop:
 - 验收：动画结束后 ≤200ms 落定；中间平台 ≥80ms 可捕获；合法单步首帧通过；
   暖格永不被 cap 删除。
 
-### S2：走子序列还原 + 识别/引擎解耦
+### S2：走子序列还原 + 识别/引擎解耦（2026-10-23 完成）
 
 - `resolveSequence`：平台优先，1-3 步合法 DFS 兜底；
 - `AssistantService`：分析 job + conflated 最新局面；循环不再 await 引擎；
 - 验收：快速两手/三手 1.5s 内记账；推荐允许滞后但棋盘/棋谱正确。
+- **已实现**：`SequenceSolver`（1-4 步合法 DFS，8k 节点预算）接入
+  「重启对齐」与「implausible」两条路径；`dispatchAnalysis` 独立 job +
+  `latestAnalysisFen` conflated 最新局面，识别循环不再 await 引擎。
 
 ### S3：4 步扩展 + 歧义交互 + 数据飞轮
 
@@ -259,6 +273,12 @@ loop:
 
 ### S4：进程级引擎预热 + 渐进首搜 + 自适应
 
+- **首推库优先（2026-10-23 已完成）**：KB 命中不再等引擎，秒出库着法，
+  引擎就绪后 `scheduleBookFill` 后台补齐；实测开局首推 18s → 约 1s
+- **快搜异常（2026-10-23 已定位并修复）**：实机 `fast search cost=29-90ms
+  depth=3-7` 的根因是 JNI `nativeGo` 绕过 UCI 层、没设 `limits.startTime`，
+  时间检查 `now-0` 立即 stop；补上 startTime 后按 movetime 真跑。
+  同时修复帧环外的兜底抓帧导致的正反幽灵步（只认落定帧）。
 - `EngineHolder` 进程级；状态显示；开局排队；
 - `SearchController` 渐进回调 + 自适应 movetime；
 - 验收：引擎在开局前就绪；首条候选 ≤1.5s；完整 ≤3.7s（模拟器）。

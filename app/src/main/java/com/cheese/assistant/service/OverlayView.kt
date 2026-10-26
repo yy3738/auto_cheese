@@ -211,14 +211,16 @@ class OverlayView(context: Context) : LinearLayout(context) {
     }
 
     /**
-     * 标题栏状态切换：
-     * - 局前：`开局 | 结`（纠/实隐藏）
-     * - 局中：`纠 | 实 | 结`（开局隐藏）
+     * 标题栏状态切换（2026-10-23 四态闭环）：
+     * - 局前/复盘完成：只有「开局」（「结」「纠」「实」全部隐藏）
+     * - 局中：`纠 | 实 | 结`（「开局」隐藏）
      */
     fun setGameStarted(started: Boolean) {
         newGameButton.visibility = if (started) GONE else VISIBLE
         correctButton.visibility = if (started) VISIBLE else GONE
         liveButton.visibility = if (started) VISIBLE else GONE
+        sealButton.visibility = if (started) VISIBLE else GONE
+        if (started) resetSealButton()
     }
 
     /** 标题栏藏蓝底要盖住卡片圆角外的直角:圆角只有顶部两角 */
@@ -338,19 +340,27 @@ class OverlayView(context: Context) : LinearLayout(context) {
         suggestionContainer.alpha = if (degraded) 0.4f else 1f
     }
 
-    /** 封存完成后切"下一局"状态:朱红实底强调,引导进入下一局 */
-    fun showNextGameMode() {
-        sealButton.text = "下一局"
-        sealButton.setTextColor(0xFFFFFFFF.toInt())
-        sealButton.setPadding(dp(10), dp(2), dp(10), dp(2))
-        sealButton.background = pill(colorVermillion.toLong())
-    }
-
-    /** 复盘进行中:按钮转灰蓝"复盘中",明确反馈已受理(完成时切"下一局") */
+    /** 复盘进行中:按钮转灰蓝"复盘中",明确反馈已受理(完成时回到「开局」态) */
     fun showReviewingMode() {
+        newGameButton.visibility = GONE
+        correctButton.visibility = GONE
+        liveButton.visibility = GONE
+        sealButton.visibility = VISIBLE
         sealButton.text = "复盘中"
         sealButton.setTextColor(0xFFFFFFFF.toInt())
         sealButton.setPadding(dp(10), dp(2), dp(10), dp(2))
+        sealButton.background = pill(colorNavySoft.toLong())
+    }
+
+    /** 复盘进度:按钮直接显示「复盘X/Y」——短局 1/1 也能看出已受理并完成 */
+    fun setReviewProgress(done: Int, total: Int) {
+        newGameButton.visibility = GONE
+        correctButton.visibility = GONE
+        liveButton.visibility = GONE
+        sealButton.visibility = VISIBLE
+        sealButton.text = "复盘$done/$total"
+        sealButton.setTextColor(0xFFFFFFFF.toInt())
+        sealButton.setPadding(dp(8), dp(2), dp(8), dp(2))
         sealButton.background = pill(colorNavySoft.toLong())
     }
 

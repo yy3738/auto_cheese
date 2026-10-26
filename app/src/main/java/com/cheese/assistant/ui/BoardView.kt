@@ -24,6 +24,14 @@ class BoardView @JvmOverloads constructor(
     var position: Position = Position.START
         set(value) { field = value; invalidate() }
 
+    /**
+     * 上下翻转显示（2026-10-23 用户要求：实况页永远"我执子在下"）。
+     * 只翻行、不翻列——数据仍存规范方向（row0=黑方底线），触屏纠正
+     * 时同样按视觉行反算，避免手动纠错写反。
+     */
+    var flipped: Boolean = false
+        set(value) { if (field != value) { field = value; invalidate() } }
+
     var currentBrush: Piece? = null   // 待放置的棋子
     var selected: Int = -1            // 已选中格 index
 
@@ -60,25 +68,30 @@ class BoardView @JvmOverloads constructor(
 
         // 选中高亮
         if (selected >= 0) {
+            val srow = visualRow(selected)
             canvas.drawRect(
-                cx(selected % 9) - cw / 2, cy(selected / 9) - ch / 2,
-                cx(selected % 9) + cw / 2, cy(selected / 9) + ch / 2, selPaint)
+                cx(selected % 9) - cw / 2, cy(srow) - ch / 2,
+                cx(selected % 9) + cw / 2, cy(srow) + ch / 2, selPaint)
         }
 
         // 棋子
         for (idx in 0 until 90) {
             val p = position.board[idx] ?: continue
-            val row = idx / 9; val col = idx % 9
+            val row = visualRow(idx); val col = idx % 9
             textPaint.color = if (p.isRed) 0xFFB3352B.toInt() else 0xFF1A1A1A.toInt()
             canvas.drawText(p.cnName, cx(col), cy(row) + 14f, textPaint)
         }
     }
 
+    /** 规范行号 → 视觉行号（flipped 时上下翻） */
+    private fun visualRow(idx: Int): Int = if (flipped) 9 - idx / 9 else idx / 9
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.action != MotionEvent.ACTION_DOWN) return true
         val cw = width / 9f; val ch = height / 10f
         val col = (event.x / cw).toInt().coerceIn(0, 8)
-        val row = (event.y / ch).toInt().coerceIn(0, 9)
+        val visual = (event.y / ch).toInt().coerceIn(0, 9)
+        val row = if (flipped) 9 - visual else visual
         val idx = row * 9 + col
 
         when {

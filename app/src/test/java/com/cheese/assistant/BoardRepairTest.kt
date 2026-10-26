@@ -5,6 +5,8 @@ import com.cheese.assistant.board.Position
 import com.cheese.assistant.recognize.BoardRepair
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -62,5 +64,42 @@ class BoardRepairTest {
     @Test
     fun `没有缺失不修`() {
         assertNull(BoardRepair.restoreMissing(Position.START, Position.START))
+    }
+
+    @Test
+    fun `同兵种异色的静态格按期望纠正`() {
+        // START 的 81 是红车；本帧读成黑车（颜色门误判），该格静态
+        val expected = Position.START
+        val b = Position.START.board.copyOf()
+        b[81] = Piece.B_ROOK
+        val observed = Position(b, true)
+        val r = BoardRepair.fixColors(expected, observed) { true }
+        assertNotNull(r)
+        assertEquals(Piece.R_ROOK, r!!.first.board[81])
+        assertEquals(listOf(81), r.second)
+    }
+
+    @Test
+    fun `非静态格不纠色`() {
+        val b = Position.START.board.copyOf()
+        b[81] = Piece.B_ROOK
+        val observed = Position(b, true)
+        assertNull(BoardRepair.fixColors(Position.START, observed) { false })
+    }
+
+    @Test
+    fun `兵种不同不纠色`() {
+        val b = Position.START.board.copyOf()
+        b[81] = Piece.B_KNIGHT
+        val observed = Position(b, true)
+        assertNull(BoardRepair.fixColors(Position.START, observed) { true })
+    }
+
+    @Test
+    fun `期望为空不纠色`() {
+        val b = Position.START.board.copyOf()
+        b[44] = Piece.B_ROOK       // 期望 44 是空的
+        val observed = Position(b, true)
+        assertNull(BoardRepair.fixColors(Position.START, observed) { true })
     }
 }

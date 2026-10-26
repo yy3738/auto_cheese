@@ -186,7 +186,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         startService(overlayIntent(AssistantService.Action.START_AUTO, ""))
-        Toast.makeText(this, "已开启自动识别,请切到对局界面", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "悬浮窗已开启，切到对局后点「开局」开始记账", Toast.LENGTH_LONG).show()
     }
 
     private fun overlayIntent(action: String, fen: String): Intent =

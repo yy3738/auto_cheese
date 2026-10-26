@@ -4,6 +4,7 @@ import com.cheese.assistant.util.AppLog
 import android.graphics.Bitmap
 import com.cheese.assistant.board.Piece
 import com.cheese.assistant.board.Position
+import com.cheese.assistant.capture.CellSampler
 import com.cheese.assistant.capture.ScreenCapture
 import java.io.File
 
@@ -45,12 +46,33 @@ class BoardWatcher(
      * 导致每 20 秒一轮「前台非对局界面, 识别暂停」假暂停。
      */
     private val overlayBounds: (() -> android.graphics.Rect?)? = null,
+    /**
+     * 动画感知采集（S1b，2026-10-23）：监听式逐帧细胞状态 + 落定窗口。
+     * 采集不可用时自动回退旧的 captureStable 双帧等待。
+     */
+    private val enableCellStream: Boolean = true,
 ) {
 
     companion object {
         private const val SKIP = -1000
         private const val DUMP_LIMIT = 5
         private const val QUIET_MS = 350L
+        /** 帧环采集启动失败的重试间隔（投屏重授权后自愈） */
+        private const val STREAM_RETRY_MS = 5_000L
+        /** 等落定窗口的短轮询：无变化时不拖慢识别空转周期 */
+        private const val SETTLE_POLL_MS = 80L
+        /**
+         * 帧环开着但长时间无落定才允许回退抓帧（只为探测采集是否卡死）。
+         * 1.5s 太频繁：空闲期每轮都要 captureFresh+captureStable 白等约 1s，
+         * 既费电又容易抓到不该认的帧（2026-10-23 实测空闲轮询 ~1.8s 一次）。
+         */
+        private const val STREAM_IDLE_MS = 4_000L
+        /** 动画一直不落定（异常）时的逃生：超过此时长允许回退一帧 */
+        private const val STREAM_STUCK_MS = 3_500L
+        /** 边条指纹不符时先容忍几帧（继续识别，靠双王/子数门把关） */
+        private const val EDGE_TOLERATE = 2
+        /** 连续不符这么多帧才暂停识别（=真的不是对局界面） */
+        private const val EDGE_PAUSE_RUN = 3
         private const val POLL_TIMEOUT_MS = 250L
         private const val STABLE_TIMEOUT_MS = 8000L
         // FNV 已弃用，改用差分比较；采样点总数约 48x48=2304，
@@ -94,6 +116,12 @@ class BoardWatcher(
 
         /** 期望局面冲突数的上一份快照（日志限频用） */
         private var lastExpectedConflictKey = ""
+
+        /** 超限核对「暖格保留不删」的上一份快照（日志限频用） */
+        private var lastCapWarmKeepKey = ""
+
+        /** 同兵种异色纠正的上一份快照（日志限频用） */
+        private var lastColorFixKey = ""
 
     /** 兜底锚点已被逃生门禁用（本轮识别会话内不再使用，重建成功后复位） */
     private var fallbackDisabled = false
@@ -178,15 +206,57 @@ class BoardWatcher(
     /** 最近一帧稳定画面：静止棋盘 ImageReader 不推新帧时复用它继续识别 */
     private var lastBmp: Bitmap? = null
 
+    /** 细胞状态流（S1b）；启动失败每 5s 重试一次（投屏重授权后能自愈） */
+    private var streamAttemptAt = 0L
+    private var cellStreamOn = false
+    private var cellSampler: CellSampler? = null
+    /** 上一次落定/兜底识别的时刻（帧环开着时用来判定是否允许回退抓帧） */
+    private var lastSettleAt = 0L
+    /** 最近一次成功识别结果：动画中没有落定时原样返回，避免抓旧帧记幽灵步 */
+    private var lastObserved: Observed? = null
+
+    /** 启动动画感知采集（S1b）；失败/未授权时保持旧的双帧稳定路径 */
+    private fun ensureCellStream() {
+        if (cellStreamOn) return
+        if (!enableCellStream || !ScreenCapture.isRunning) return
+        val now = System.currentTimeMillis()
+        if (now - streamAttemptAt < STREAM_RETRY_MS) return
+        streamAttemptAt = now
+        val w = ScreenCapture.frameWidth
+        val h = ScreenCapture.frameHeight
+        if (w <= 0 || h <= 0) return
+        val sampler = CellSampler(grid, w, h, excludeBounds = overlayBounds)
+        cellStreamOn = ScreenCapture.startCellStream(sampler)
+        if (cellStreamOn) {
+            cellSampler = sampler
+            lastSettleAt = System.currentTimeMillis()
+        } else {
+            AppLog.w("BoardWatcher", "帧环采集未启动, 回退双帧稳定")
+        }
+    }
+
+    /** 停止采集流（识别循环退出/服务销毁时调用，避免监听器泄漏） */
+    fun close() {
+        // 只停自己的流：重试重建 watcher 时，旧协程的 finally 可能晚于
+        // 新 watcher 启动（2026-10-23 代码审查 HIGH）
+        if (cellStreamOn || cellSampler != null) {
+            ScreenCapture.stopCellStream(cellSampler)
+        }
+        cellStreamOn = false
+        cellSampler = null
+    }
+
     fun waitForPosition(timeoutMs: Long = STABLE_TIMEOUT_MS): Observed? {
         var prunedThisFrame = false
         // 前台判定主轨: 非对局前台 → 暂停(不截帧不喂引擎)
         if (foregroundCheck?.invoke() == false) {
+            if (cellStreamOn) ScreenCapture.clearSettles()
             Thread.sleep(QUIET_MS)
             return null
         }
         // 实况页盖住棋盘时暂停识别(读到的是实况页自己渲染的盘)
         if (com.cheese.assistant.service.GameLiveState.livePageOpen) {
+            if (cellStreamOn) ScreenCapture.clearSettles()
             Thread.sleep(QUIET_MS)
             return null
         }
@@ -195,7 +265,47 @@ class BoardWatcher(
         // 「等待稳定棋盘画面」十几秒，用户以为卡死并点重试（2026-10-22
         // 实测重试把两步棋跳掉）。没有新帧就用上一帧继续识别，局面不变
         // 时循环会保持现有推荐。
-        val fresh0 = ScreenCapture.captureFresh(QUIET_MS)
+        //
+        // 2026-10-23（S1b）：动画感知采集开着时，先等状态机的落定窗口
+        // （非装饰格安静 160ms），拿到就用落定帧直接识别。
+        //
+        // 2026-10-23 幽灵步修复：帧环开着时**只认落定帧**。旧版在没有落定
+        // 时会回退 captureFresh/lastBmp 抓任意帧识别，把动画中或落后的画面
+        // 当新盘——实测同一个红马被记成 (9,7)→(7,6) → 反向 → 再正向三次。
+        // 现在：动画中/落定未到 → 原样返回上次局面（不抓帧不记谱）；
+        // 只有首次启动（还没有任何局面）或长时间无落定（采集异常）才兜底。
+        ensureCellStream()
+        var settle = if (cellStreamOn) ScreenCapture.pollSettle(SETTLE_POLL_MS) else null
+        var settleBmp = settle?.bitmap
+        if (settle != null && settleBmp == null) {
+            // 落定帧转换失败：按"没等到落定"处理，不能拿旧帧顶替
+            AppLog.w("BoardWatcher",
+                "settle seq=${settle.window.seq} bitmap missing, wait next")
+            settle = null
+        }
+        if (cellStreamOn) {
+            val now = System.currentTimeMillis()
+            if (settle != null) {
+                lastSettleAt = now
+            } else {
+                val moving = ScreenCapture.isMoving
+                val idle = now - lastSettleAt
+                val allowFallback =
+                    (!moving && (lastObserved == null || idle >= STREAM_IDLE_MS)) ||
+                        (moving && idle >= STREAM_STUCK_MS)
+                if (!allowFallback) return lastObserved
+                lastSettleAt = now
+                AppLog.d("BoardWatcher",
+                    "no settle ${idle}ms moving=$moving → fallback frame")
+            }
+        }
+        if (settle != null) {
+            AppLog.d("BoardWatcher", "settle frame seq=${settle.window.seq} " +
+                "moving=${settle.window.movingMs}ms " +
+                "changed=${settle.window.changed.count { it }} " +
+                "plateaus=${settle.window.plateaus.size}")
+        }
+        val fresh0 = settleBmp ?: ScreenCapture.captureFresh(QUIET_MS)
         val bmp0 = fresh0 ?: lastBmp ?: run {
             Thread.sleep(QUIET_MS)
             return null
@@ -207,30 +317,42 @@ class BoardWatcher(
         val fp = if (foregroundCheck == null || foregroundCheck.invoke() == null) edgeFp else null
         if (fp != null) {
             val cur = edgeSample(bmp0)
-            val okTop = matchRatio(fp.first, cur.first) >= 0.8f
-            val okBot = matchRatio(fp.second, cur.second) >= 0.8f
-            if (!(okTop && okBot)) {
+            val topR = matchRatio(fp.first, cur.first)
+            val botR = matchRatio(fp.second, cur.second)
+            if (topR < 0.8f || botR < 0.8f) {
                 mismatchRun++
-                if (mismatchRun == 1 || mismatchRun % 40 == 0) {
-                    AppLog.w("BoardWatcher", "前台非对局界面(边条指纹不符), 识别暂停 ×$mismatchRun")
+                // 2026-10-23：边条指纹降级为"提示"，不再一帧不符就暂停+丢弃。
+                // 实测它会把**真实走子的落定窗口**判成非对局界面（top/bot 比值
+                // 打印出来定位），每手白烧 1.1s 重试；识别层其实认得对。
+                // 现在容忍前两帧（继续走识别，由双王/子数/期望门把关），
+                // 连续 3 帧不符才暂停；60 帧才重学指纹。
+                if (mismatchRun <= EDGE_TOLERATE || mismatchRun % 40 == 0) {
+                    AppLog.w("BoardWatcher",
+                        "边条指纹不符 top=${"%.2f".format(topR)} bot=${"%.2f".format(botR)}" +
+                            " ×$mismatchRun")
                 }
-                if (mismatchRun >= 60) {
-                    // 自适应重学: 长期不符可能是换桌/换皮肤, 学一次放行,
-                    // 之后靠 credibility 硬门与落定观察期把关
-                    AppLog.w("BoardWatcher", "非对局界面持续 60 帧, 重学边条指纹(自适应)")
-                    edgeFp = cur
-                    mismatchRun = 0
+                if (mismatchRun >= EDGE_PAUSE_RUN) {
+                    if (mismatchRun >= 60) {
+                        // 自适应重学: 长期不符可能是换桌/换皮肤, 学一次放行
+                        AppLog.w("BoardWatcher", "非对局界面持续 60 帧, 重学边条指纹(自适应)")
+                        edgeFp = cur
+                        mismatchRun = 0
+                    }
+                    if (cellStreamOn) ScreenCapture.clearSettles()
+                    Thread.sleep(QUIET_MS)
+                    return null
                 }
-                Thread.sleep(QUIET_MS)
-                return null
+            } else {
+                mismatchRun = 0
             }
         }
         // 稳定等待: 连续两帧一致才识别(动画结束的信号, 识别时序的基础)
-        val bmp = if (fresh0 == null) {
+        val bmp = when {
+            // 状态机已确认落定：这一帧直接送识别
+            settleBmp != null -> settleBmp
             // 没有新帧 = 画面静止，直接用上一帧，不再空等
-            bmp0
-        } else {
-            ScreenCapture.captureStable(QUIET_MS, timeoutMs, ::sameRegion)
+            fresh0 == null -> bmp0
+            else -> ScreenCapture.captureStable(QUIET_MS, timeoutMs, ::sameRegion)
                 ?: lastBmp
                 ?: run {
                     AppLog.e("BoardWatcher", "waitForPosition: captureStable null")
@@ -327,6 +449,23 @@ class BoardWatcher(
         val expectedBoard = expected?.takeIf { expectedConflicts <= MAX_FALLBACK_CONFLICTS }
         if (expectedBoard != null) {
             repairMissingExpected(expectedBoard, pos, frameWarmth)?.let { pos = it }
+            // 同兵种异色的静态格按期望局面纠正：颜色门偶发误判会把红车
+            // 配成黑车（实测 R-G=31.5 < 35 阈值），黑方凭空多一个车、
+            // 棋谱永久对不上（2026-10-23）。颜色永不改变，静态格上的
+            // 同形异色一定是误配。
+            BoardRepair.fixColors(expectedBoard, pos) { i ->
+                anchorSnap != null &&
+                    cellDiff(anchorSnap!!, frameSnap, i) <= CELL_SNAP_DIFF_LIMIT
+            }?.let { (fixedPos, cells) ->
+                pos = fixedPos
+                val key = cells.joinToString(",")
+                if (key != lastColorFixKey) {
+                    lastColorFixKey = key
+                    AppLog.w("BoardWatcher", "expected-color fix: " +
+                        cells.joinToString { "(${it / 9},${it % 9})→" +
+                            (expectedBoard.board[it]?.cnName ?: "?") })
+                }
+            }
         } else if (expected != null) {
             val key = expectedConflicts.toString()
             if (key != lastExpectedConflictKey) {
@@ -410,8 +549,9 @@ class BoardWatcher(
                     failRun = 0
                     hardFailRun = 0
                     fallbackDisabled = false
+                    mismatchRun = 0
                     return Observed(normalizeOrientation(repaired), userRed,
-                        warmth = frameWarmth)
+                        warmth = frameWarmth).also { lastObserved = it }
                 }
             }
             return null
@@ -439,8 +579,24 @@ class BoardWatcher(
                     if (b[i] != p) continue
                     val e = expectedNorm.board[i]
                     if (e == p) continue
+                    // 快照是 raw 方向，i 是 normalize 之后的下标——执黑时必须翻格
+                    val rawCell = if (flip) (9 - i / 9) * 9 + i % 9 else i
                     val static = snapCurCap != null && anchorSnap != null &&
-                        cellDiff(anchorSnap!!, snapCurCap, i) <= CELL_SNAP_DIFF_LIMIT
+                        cellDiff(anchorSnap!!, snapCurCap, rawCell) <= CELL_SNAP_DIFF_LIMIT
+                    // 2026-10-23：期望说「空」但该格仍是木色棋子 = 期望过期，
+                    // 绝不借 margin 删真子（17:51 真黑马就是这样被删掉的）。
+                    // 暖格只在期望给的是「另一枚子」时才允许改写：子还在，只改判型。
+                    val warm = frameWarmth[rawCell] >= WARMTH_PIECE_MIN
+                    if (static && !MoveCheck.canDropOverCap(e, warm)) {
+                        val key = "${p.name}@${i / 9},${i % 9}"
+                        if (key != lastCapWarmKeepKey) {
+                            lastCapWarmKeepKey = key
+                            AppLog.w("BoardWatcher",
+                                "piece cap $p: (${i / 9},${i % 9}) 木色棋子仍在," +
+                                    " 期望「空」已过期, 保留不删")
+                        }
+                        continue
+                    }
                     // 只认"像素没动过"的证据：首帧没有锚点快照时不猜颜色，
                     // 宁可整帧作废，也不能基于过期期望删掉真子
                     if (static) {
@@ -489,8 +645,9 @@ class BoardWatcher(
         // 锚点存最终盘面：旧版存 pre-prune 的 pos，3 红车的毒会带进下一帧
         lastGood = AnchorState(orient(normalizedPruned, flip), userRed)
         anchorSnap = snapCur
+        mismatchRun = 0
         return Observed(normalizedPruned, userRed, prunedThisFrame,
-            snapCur.clone(), snapAnchor?.clone(), frameWarmth)
+            snapCur.clone(), snapAnchor?.clone(), frameWarmth).also { lastObserved = it }
     }
 
     /** 识别成功的一帧：归一化局面 + 用户执方 + 裁剪/快照上下文 */
@@ -786,6 +943,38 @@ object MoveCheck {
 
     fun isPlausibleStep(prev: Position, cur: Position): Boolean =
         stepMoverIsRed(prev, cur) != null
+
+    /**
+     * 本局面是否在某个（方,兵种）上比参照局面更多子。
+     *
+     * 象棋里棋子只减不增（只能被吃），所以"本帧比棋谱多出某一方的某兵种"
+     * 一定是识别误配。实测：红车被颜色门改判成黑车 → 黑方凭空多一个车，
+     * 之后每帧都解释不成合法走子，`implausible` 卡死十几秒不恢复。
+     */
+    fun exceedsMaterialCount(frame: Position, reference: Position): Boolean {
+        for (p in Piece.entries) {
+            if (frame.board.count { it == p } > reference.board.count { it == p }) return true
+        }
+        return false
+    }
+
+    /**
+     * 同色超限核对：期望局面说该格「空」，是否允许据此删掉本帧判出的棋子。
+     *
+     * 木色棋子还在（warm=true）说明期望已经过期，按期望删下去就是少子
+     * （2026-10-23 实测真黑马被 `expected restore → 空 [static]` 删掉）。
+     * 期望给的是另一枚子时子还在，只改判型，允许改写。
+     */
+    fun canDropOverCap(expected: Piece?, warm: Boolean): Boolean =
+        !(expected == null && warm)
+
+    /**
+     * 出发点像素静止时的幻步裁决（本帧木色证据优先于过期快照）：
+     * - warm=true：棋子还没离开出发点 → 残影幻步，拒收；
+     * - warm=false：出发点已冷色空盘 → 棋子真的走了，快照过期 → 放行；
+     * - warm=null：没有木色证据，沿用旧的多帧保护。
+     */
+    fun rejectStaticOrigin(originWarm: Boolean?): Boolean = originWarm != false
 
     /**
      * 严格单步 + 象棋规则校验: 恰好 2 处差异、移动者身份吻合、且

@@ -171,6 +171,12 @@ class SearchController(
         val byRank = HashMap<Int, Candidate>()
         var bestMove = ""
         var maxDepth = 0
+        // 2026-10-23 诊断：本轮出现多次 cost=29-75ms 的快搜（depth 只有 3-7），
+        // 与 movetime=600 不符。记录 info 行数/首个 info 时刻/bestmove 时刻，
+        // 区分"真快搜"、“残留 bestmove”、“movetime 未生效（3.6s 慢搜）”。
+        var infoLines = 0
+        var firstInfoMs = -1L
+        var bestAtMs = -1L
 
         // 清掉上一局残留的输出（stop 后补发的行可能迟到），避免污染本次解析
         while (e.nativePollLine(0) != null) Unit
@@ -185,12 +191,15 @@ class SearchController(
             when (val parsed = UciParser.parse(line)) {
                 is UciLine.Info -> {
                     val c = parsed.candidate
+                    if (firstInfoMs < 0) firstInfoMs = System.currentTimeMillis() - startedAt
+                    infoLines++
                     val old = byRank[c.rank]
                     if (old == null || c.depth >= old.depth) byRank[c.rank] = c
                     maxDepth = maxOf(maxDepth, c.depth)
                 }
                 is UciLine.BestMove -> {
                     bestMove = parsed.move
+                    bestAtMs = System.currentTimeMillis() - startedAt
                     break
                 }
                 else -> Unit
@@ -208,12 +217,15 @@ class SearchController(
                 when (val parsed = UciParser.parse(line)) {
                     is UciLine.Info -> {
                         val c = parsed.candidate
+                        if (firstInfoMs < 0) firstInfoMs = System.currentTimeMillis() - startedAt
+                        infoLines++
                         val old = byRank[c.rank]
                         if (old == null || c.depth >= old.depth) byRank[c.rank] = c
                         maxDepth = maxOf(maxDepth, c.depth)
                     }
                     is UciLine.BestMove -> {
                         bestMove = parsed.move
+                        bestAtMs = System.currentTimeMillis() - startedAt
                         break
                     }
                     else -> Unit
@@ -225,15 +237,21 @@ class SearchController(
         e.nativeWaitForSearchFinished()
 
         val cost = System.currentTimeMillis() - startedAt
+        // 诊断串：快搜到底是"引擎真算完"还是"吃到残留 bestmove"，
+        // 以及慢搜是否 movetime 根本没生效（infos=0 说明没开搜）
+        val diag = "infos=$infoLines firstInfo=${firstInfoMs}ms bestAt=${bestAtMs}ms " +
+            "bestInCands=${byRank.values.any { it.pv.firstOrNull() == bestMove }}"
         when {
             bestMove.isEmpty() ->
-                AppLog.w("SearchCtl", "no bestmove fen=[${fen.take(24)}…] cost=${cost}ms")
+                AppLog.w("SearchCtl", "no bestmove fen=[${fen.take(24)}…] " +
+                    "cost=${cost}ms $diag")
             cost > movetime + 2000L ->
-                AppLog.w("SearchCtl", "slow search cost=${cost}ms movetime=$movetime best=${bestMove.take(8)}")
+                AppLog.w("SearchCtl", "slow search cost=${cost}ms movetime=$movetime " +
+                    "best=${bestMove.take(8)} depth=$maxDepth $diag")
             // 远快于 movetime 的搜索多半是残留输出/引擎未真正开搜，留证
             cost < movetime / 2 ->
-                AppLog.w("SearchCtl", "fast search cost=${cost}ms best=${bestMove.take(8)} " +
-                    "depth=$maxDepth cands=${byRank.size}")
+                AppLog.w("SearchCtl", "fast search cost=${cost}ms movetime=$movetime " +
+                    "best=${bestMove.take(8)} depth=$maxDepth cands=${byRank.size} $diag")
         }
 
         SearchResult(

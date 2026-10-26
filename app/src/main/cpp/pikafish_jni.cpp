@@ -189,6 +189,12 @@ JNIEXPORT void JNICALL
 Java_com_cheese_assistant_engine_PikafishEngine_nativeGo(JNIEnv*, jobject, jint movetimeMs) {
     if (!g_initialized) return;
     Search::LimitsType limits;
+    // 2026-10-23 修复：UCI 入口 (uci.cpp) 会设置 startTime，本桥直调
+    // Engine::go() 绕过了那一层，startTime 默认 0 → TimeManagement 里
+    // elapsed = now - 0 是天文数字，第一次时间检查就 stop。实测每手搜索
+    // 29-90ms、depth 3-7，复盘标称 3000ms 实际 30-50ms（知识库因此全是浅结果）。
+    limits.startTime = TimePoint(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
     // movetime 由引擎自查自停:此前不改 limits 时引擎全功率搜索,
     // 靠 Java 层在 movetime+3000ms 后才 stop——每次推荐白搜 3 秒
     if (movetimeMs > 0) limits.movetime = movetimeMs;

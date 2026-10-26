@@ -35,6 +35,13 @@ object GameLiveState {
      *  自己渲染的盘, 2026-10-21 实测引发"黑车识别不出来") */
     @Volatile var livePageOpen: Boolean = false
 
+    /** 用户执红？实况页据此决定是否上下翻转（永远"我执子在下"） */
+    @Volatile var userIsRed: Boolean = true
+
+    fun setUserSide(isRed: Boolean) {
+        userIsRed = isRed
+    }
+
     fun update(fen: String, moveLines: List<String>, replayFen: String, match: Boolean?) {
         this.fen = fen
         this.moveLines = moveLines

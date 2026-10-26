@@ -24,9 +24,8 @@ class CapturePermissionActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_CODE && resultCode == RESULT_OK && data != null) {
             ScreenCapture.start(this, resultCode, data)
-            // 授权即自动启动识别循环(2026-10-21): 旧流程要求"授权后再点
-            // 一次按钮", 用户授权完直接切 JJ → 循环从未启动 → "识别不出
-            // 来"。现在一键: 授权后服务+悬浮窗+循环全自动
+            // 授权后只启动服务+悬浮窗，识别循环等用户点「开局」再开
+            // （2026-10-23 用户要求：没点开局不识别、不提示识别不稳定）
             startForegroundService(
                 Intent(this, com.cheese.assistant.service.AssistantService::class.java)
                     .setAction(com.cheese.assistant.service.AssistantService.Action.START_AUTO))

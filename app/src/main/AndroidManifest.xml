@@ -45,7 +45,8 @@
 
         <activity
             android:name=".ui.LiveGameActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:launchMode="singleTask" />
 
         <service
             android:name=".service.AssistantService"
