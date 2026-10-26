@@ -65,11 +65,18 @@ object BoardRepair {
         var board: Array<com.cheese.assistant.board.Piece?>? = null
         val fixed = ArrayList<Int>(2)
         for (i in 0 until 90) {
-            val cur = pos.board[i] ?: continue
-            val exp = expected.board[i] ?: continue
+            val cur = pos.board[i]
+            val exp = expected.board[i]
             if (cur == exp) continue
-            if (cur.cnName != exp.cnName) continue     // 只纠同兵种异色
-            if (!isStatic(i)) continue
+            // 关键判据（2026-10-26 回归修复）：整帧与棋谱的差异必须**全部**是
+            // "同兵种异色"。真实走子/吃子必然让某格变空或多子（起点/落点），
+            // 一旦出现 null 差异就绝不能纠色——否则会把用户刚走的子按旧棋谱
+            // 改回去（实测：红车吃黑车后，(8,3) 的红车被改回黑车）。
+            // 灰度快照分不出红/黑（同格红车↔黑车灰度几乎相同），所以
+            // "静态"这条不够，必须有这一条。
+            if (cur == null || exp == null) return null
+            if (cur.cnName != exp.cnName) return null   // 只纠同兵种异色
+            if (!isStatic(i)) return null               // 刚动过 = 可能是真实走子
             if (board == null) board = pos.board.copyOf()
             board[i] = exp
             fixed.add(i)

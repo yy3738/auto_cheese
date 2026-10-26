@@ -97,3 +97,21 @@ python tools/train_charcnn.py        # 约 3-5 分钟(CPU)
   （模型 <20K 参数,28×28 输入,单帧 <50ms,零新依赖）
 - 替换点：仅 `BoardRecognizer` 的模板匹配段;`BoardWatcher` 可信门/修复层/
   `AutoLoop` 循环层全部保留——它们对"CNN 也可能错"的帧仍是最后防线
+
+## 十、识别样本飞轮（2026-10-26）
+
+App 会在三类事件落盘难例，供下一轮重训：
+
+| 来源 | 目录 | 内容 |
+|---|---|---|
+| 歧义确认 | `files/labels/<时间>-ambiguity/` | `frame.png` + `meta.json`（确认后的 FEN、涉及格号、候选文本） |
+| 四下拉纠错 | `files/labels/<时间>-correction/` | 同上，`note` 为纠错输入 |
+| 识别拒帧 | `files/dump/mp_*.png/.json` | PNG + `{reason, expected}`（拒帧原因 + 棋谱当前局面） |
+
+索引：`files/labels/index.jsonl`（每行一条 meta，含 `dir`），目录上限 200。
+拉取：`adb exec-out run-as com.cheese.assistant tar -C files -cf - labels dump > labels.tar`。
+
+入训练集时：`meta.json.fen` 是确认后的正确盘面，按现有 `row0=黑方底线`
+口径生成 90 格标注；`cells` 标出涉及格，可作为硬负样本加权。**重训前先跑
+`tools/audit_dataset.py` 去重与错标审计**，再按 `tools/train_cnn.py` 的流程
+验收（留出集、硬负、光圈增强）。

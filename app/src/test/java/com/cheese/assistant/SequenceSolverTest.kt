@@ -92,6 +92,53 @@ class SequenceSolverTest {
     }
 
     @Test
+    fun `同兵种互换顺序时能枚举出多解`() {
+        // 红兵 (5,0)/(5,2) 各进一步，黑卒 (3,1)/(3,3) 各进一步；
+        // 同色两步互换先后都能到同一终局 → 至少 2 条解
+        val prev = Position(boardOf(
+            kingB to Piece.B_KING, kingR to Piece.R_KING,
+            5 * 9 to Piece.R_PAWN, 5 * 9 + 2 to Piece.R_PAWN,
+            3 * 9 + 1 to Piece.B_PAWN, 3 * 9 + 3 to Piece.B_PAWN,
+        ), true)
+        val cur = Position(boardOf(
+            kingB to Piece.B_KING, kingR to Piece.R_KING,
+            4 * 9 to Piece.R_PAWN, 4 * 9 + 2 to Piece.R_PAWN,
+            4 * 9 + 1 to Piece.B_PAWN, 4 * 9 + 3 to Piece.B_PAWN,
+        ), true)
+        val all = SequenceSolver.solveAll(prev, cur, minPlies = 4, maxPlies = 4)
+        assertTrue(all.size >= 2)
+        for (chain in all) {
+            assertEquals(5, chain.size)
+            assertTrue(chain.last().board.contentEquals(cur.board))
+        }
+        // 解不能重复（按着法序列去重）
+        val sigs = all.map { c ->
+            (0 until c.size - 1).joinToString(",") { k ->
+                val a = c[k]; val b = c[k + 1]
+                val from = (0 until 90).first { a.board[it] != null && b.board[it] == null }
+                val to = (0 until 90).first { a.board[it] == null && b.board[it] != null }
+                "${from * 90 + to}"
+            }
+        }
+        assertEquals(sigs.size, sigs.toSet().size)
+    }
+
+    @Test
+    fun `平台可以给候选序列打分`() {
+        val prev = Position(boardOf(kingB to Piece.B_KING, kingR to Piece.R_KING,
+            9 * 9 to Piece.R_ROOK, 3 * 9 to Piece.B_PAWN), true)
+        val cur = Position(boardOf(kingB to Piece.B_KING, kingR to Piece.R_KING,
+            9 * 9 + 1 to Piece.R_ROOK, 4 * 9 to Piece.B_PAWN), true)
+        val chain = SequenceSolver.solve(prev, cur, minPlies = 2, maxPlies = 2)!!
+        // 第一步（红车 81→82）之后的变化格：{81,82}
+        val afterFirst = BooleanArray(90).also { it[81] = true; it[82] = true }
+        // 无关平台
+        val unrelated = BooleanArray(90).also { it[10] = true; it[11] = true }
+        assertEquals(1, SequenceSolver.scoreByPlateaus(chain, listOf(afterFirst)))
+        assertEquals(0, SequenceSolver.scoreByPlateaus(chain, listOf(unrelated)))
+    }
+
+    @Test
     fun `轮走方不符时无解`() {
         val prev = Position(boardOf(kingB to Piece.B_KING, kingR to Piece.R_KING,
             9 * 9 to Piece.R_ROOK), true)

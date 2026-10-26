@@ -88,6 +88,21 @@ class BoardRepairTest {
     }
 
     @Test
+    fun `伴随走子差异时不纠色`() {
+        // 棋谱：黑车在 81、红车在 82；本帧：81 成红车、82 变空
+        // = 用户红车吃到 81 的真实走子，绝不能按旧棋谱把 81 改回黑车
+        val expected = Position(arrayOfNulls<Piece?>(90).also {
+            it[4] = Piece.B_KING; it[85] = Piece.R_KING
+            it[81] = Piece.B_ROOK; it[82] = Piece.R_ROOK
+        }, true)
+        val b = expected.board.copyOf()
+        b[81] = Piece.R_ROOK
+        b[82] = null
+        val observed = Position(b, true)
+        assertNull(BoardRepair.fixColors(expected, observed) { true })
+    }
+
+    @Test
     fun `兵种不同不纠色`() {
         val b = Position.START.board.copyOf()
         b[81] = Piece.B_KNIGHT

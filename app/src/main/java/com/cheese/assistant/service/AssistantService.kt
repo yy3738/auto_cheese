@@ -32,6 +32,11 @@ import com.cheese.assistant.recognize.MoveInput
 import com.cheese.assistant.recognize.PreferenceAccess
 import com.cheese.assistant.recognize.RecognizerEngineFactory
 import com.cheese.assistant.recognize.SequenceSolver
+import com.cheese.assistant.review.GameRecorder
+import com.cheese.assistant.capture.MotionTracker
+import com.cheese.assistant.util.SampleStore
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 import com.cheese.assistant.recognize.TemplateStore
 import com.cheese.assistant.review.saveToKnowledge
 import java.io.File
@@ -76,8 +81,19 @@ class AssistantService : Service() {
     private var autoJob: Job? = null
     private var reviewJob: Job? = null
 
+    /** 歧义弹窗超时（未选择按第 1 条）与冷却（防连续弹） */
+    private val AMBIGUITY_TIMEOUT_MS = 20_000L
+    private val AMBIGUITY_COOLDOWN_MS = 10_000L
+
     /** 库着法秒出后的后台补齐（引擎就绪再补两条；新分析会取消上一轮） */
     private var bookFillJob: Job? = null
+
+    /** 当前识别 watcher（歧义/纠错样本落盘时取帧用） */
+    @Volatile private var activeWatcher: BoardWatcher? = null
+
+    /** 歧义确认弹窗（S3）：同一时刻只一个；10s 内不重复弹 */
+    private var ambiguityDialog: AmbiguityDialog? = null
+    private var lastAmbiguityAt = 0L
     private val recorder: com.cheese.assistant.review.GameRecorder by lazy {
         com.cheese.assistant.review.GameRecorder().also { r ->
             val stateDir = java.io.File(filesDir, "state")
@@ -269,7 +285,12 @@ class AssistantService : Service() {
         val ctl = ensureController() ?: return listOf(
             Candidate("引擎初始化失败", "", ThreatLevel.NONE))
         return try {
+            val t0 = System.currentTimeMillis()
             val result = ctl.search(fen)
+            // 深度/耗时留证：评估"搜索质量"与 movetime 是否生效（2026-10-26）
+            AppLog.i("AutoLoop", "search depth=${result.depth} " +
+                "cands=${result.candidates.size} cost=${System.currentTimeMillis() - t0}ms " +
+                "fen=${fen.take(32)}")
             // 局面非法(幻影子/缺王)时引擎拒绝搜索:明确提示,不留旧推荐误导
             if (result.failed) listOf(Candidate("局面异常,重新定位中...", "", ThreatLevel.NONE))
             else result.candidates.map { c ->
@@ -299,15 +320,19 @@ class AssistantService : Service() {
                 AppLog.d("AutoLoop", "book fill skipped: position moved on")
                 return@launch
             }
-            val extras = runCatching {
-                ctl.search(fen).candidates.map { c ->
-                    val move = c.pv.first()
-                    val s = c.mateIn?.let { m -> if (m > 0) "杀 $m" else "被杀 $m" }
-                        ?: String.format("%+.1f", c.scoreCp!! / 100.0)
-                    Candidate("$s  ${MoveFormatter.toChinese(fen, move)}", move,
-                        threatLevelOf(ThreatMarker.of(fen, move)))
-                }
-            }.getOrDefault(emptyList()).filter { it.iccs != book.iccs }
+            val fillT0 = System.currentTimeMillis()
+            val fillResult = runCatching { ctl.search(fen) }.getOrNull()
+            fillResult?.let {
+                AppLog.i("AutoLoop", "book fill search depth=${it.depth} " +
+                    "cost=${System.currentTimeMillis() - fillT0}ms")
+            }
+            val extras = (fillResult?.candidates ?: emptyList()).map { c ->
+                val move = c.pv.first()
+                val s = c.mateIn?.let { m -> if (m > 0) "杀 $m" else "被杀 $m" }
+                    ?: String.format("%+.1f", c.scoreCp!! / 100.0)
+                Candidate("$s  ${MoveFormatter.toChinese(fen, move)}", move,
+                    threatLevelOf(ThreatMarker.of(fen, move)))
+            }.filter { it.iccs != book.iccs }
             if (extras.isEmpty()) {
                 AppLog.w("AutoLoop", "book fill: no extra candidates")
                 return@launch
@@ -410,6 +435,7 @@ class AssistantService : Service() {
                 // 旧版把它当"非对局页面", 每 20s 假暂停一轮识别
                 overlayBounds = { overlayView?.boundsOnScreen() },
             )
+            activeWatcher = watcher
             // 引擎已在 onCreate 预热；这里不阻塞识别循环。若尚未就绪，
             // 首次分析会在 analyzeCandidates 里等同一个 controllerMutex。
             serviceScope.launch(Dispatchers.IO) { ensureController(announce = false) }
@@ -682,16 +708,20 @@ class AssistantService : Service() {
                                 postAnalysis(pos, redToMove, justMoved = true)
                                 continue@autoloop
                             }
-                            // 3-4 步合法序列还原（S2）：重启期间可能连走多手
-                            val chain = SequenceSolver.solve(
+                            // 3-4 步合法序列还原（S2/S3）：重启期间可能连走多手。
+                            // 多解时先用平台消歧，仍歧义则弹窗让用户确认。
+                            val chains = SequenceSolver.solveAll(
                                 recLast, pos, minPlies = 3, maxPlies = 4)
-                            if (chain != null) {
+                            if (chains.isNotEmpty()) {
+                                val pick = resolveAmbiguity(chains, observed.window,
+                                    observed.userIsRed)
+                                val chain = chains[pick]
                                 for (k in 0 until chain.size - 1) {
                                     recorder.record(chain[k], chain[k + 1],
                                         moverIsRed = chain[k].redToMove)
                                 }
                                 AppLog.i("AutoLoop",
-                                    "restart reconcile +${chain.size - 1} (DFS): " +
+                                    "restart reconcile +${chain.size - 1} (DFS #$pick): " +
                                         chain.zipWithNext().joinToString(" | ") { (a, b) ->
                                             diffText(a, b) })
                                 last = pos
@@ -951,11 +981,12 @@ class AssistantService : Service() {
                                 // AI 秒回:我方一步+AI一步叠加在同一识别窗口,
                                 // 分解为先后两步记谱;分解失败才走 implausible
                                 val mid = MoveCheck.tryTwoSteps(prev, pos, redToMove)
-                                // 两步解释不了时再试 3-4 步合法序列（S2）：
-                                // 快速连走/识别暂停后一次看到多手，比留缺口强
-                                val chain = if (mid == null && rejects >= 1)
-                                    SequenceSolver.solve(prev, pos, minPlies = 3, maxPlies = 4)
-                                else null
+                                // 两步解释不了时再试 3-4 步合法序列（S2/S3）：
+                                // 快速连走/识别暂停后一次看到多手，比留缺口强；
+                                // 多解先用平台消歧，仍歧义让用户确认
+                                val chains = if (mid == null && rejects >= 1)
+                                    SequenceSolver.solveAll(prev, pos, minPlies = 3, maxPlies = 4)
+                                else emptyList()
                                 if (mid != null) {
                                     implausibleRounds = 0
                                     AppLog.d("AutoLoop",
@@ -979,7 +1010,10 @@ class AssistantService : Service() {
                                     lastSnap = observed.snapCur
                                     // 两步后仍轮 firstRed 方
                                     postAnalysis(pos, firstRed, justMoved = true)
-                                } else if (chain != null) {
+                                } else if (chains.isNotEmpty()) {
+                                    val pick = resolveAmbiguity(chains, observed.window,
+                                        observed.userIsRed)
+                                    val chain = chains[pick]
                                     var lastMoverRed = redToMove
                                     for (k in 0 until chain.size - 1) {
                                         lastMoverRed = chain[k].redToMove
@@ -988,7 +1022,7 @@ class AssistantService : Service() {
                                     }
                                     implausibleRounds = 0
                                     AppLog.d("AutoLoop",
-                                        "sequence ${chain.size - 1} steps: " +
+                                        "sequence ${chain.size - 1} steps (#$pick): " +
                                             chain.zipWithNext().joinToString(" | ") { (a, b) ->
                                                 diffText(a, b) })
                                     if (chain.first().redToMove != redToMove) {
@@ -1056,6 +1090,7 @@ class AssistantService : Service() {
             } finally {
                 // 停掉帧环监听（重试/纠错会重建 watcher，不关会叠监听器）
                 watcher.close()
+                if (activeWatcher === watcher) activeWatcher = null
             }
         }
     }
@@ -1218,6 +1253,73 @@ class AssistantService : Service() {
         // 落定窗口，结果回来时局面已变就丢弃（conflated 最新局面）。
         markAnalyzed(key)
         dispatchAnalysis(fen, key, side, pieces, stamp)
+    }
+
+    /** 候选序列 → "红 车四进一 → 黑 卒7进1"（歧义弹窗与日志共用） */
+    private fun chainLabel(chain: List<Position>): String =
+        (0 until chain.size - 1).joinToString(" → ") { k ->
+            val a = chain[k]
+            val b = chain[k + 1]
+            val pair = MoveCheck.legalStepPair(a, b)
+            val move = if (pair != null) {
+                MoveFormatter.toChinese(
+                    a.toFen(),
+                    "${GameRecorder.square(pair.first)}${GameRecorder.square(pair.second)}")
+            } else "?"
+            (if (a.redToMove) "红 " else "黑 ") + move
+        }
+
+    /**
+     * 多解处理（S3）：先用落定平台消歧；仍有多个解就弹窗让用户确认
+     * （列表形式，不是四下拉）。返回选中的候选下标。
+     */
+    private suspend fun resolveAmbiguity(
+        chains: List<List<Position>>,
+        window: MotionTracker.Window?,
+        userIsRed: Boolean,
+    ): Int {
+        val plateaus = window?.plateaus?.map { it.changed } ?: emptyList()
+        val flip = !userIsRed
+        val scored = chains.indices.map { i ->
+            i to SequenceSolver.scoreByPlateaus(chains[i], plateaus, flip)
+        }.sortedByDescending { it.second }
+        val best = scored.firstOrNull()?.second ?: 0
+        val top = scored.filter { it.second == best }.map { it.first }
+        AppLog.i("AutoLoop",
+            "sequence candidates=${chains.size} plateaus=${plateaus.size} " +
+                "scores=${scored.joinToString { it.second.toString() }} top=${top.size}")
+        if (top.size <= 1) return top.firstOrNull() ?: 0
+        if (System.currentTimeMillis() - lastAmbiguityAt < AMBIGUITY_COOLDOWN_MS) {
+            AppLog.w("AutoLoop",
+                "ambiguity dialog skipped (cooldown), take #${top.first()}")
+            return top.first()
+        }
+        lastAmbiguityAt = System.currentTimeMillis()
+        val labels = top.map { chainLabel(chains[it]) }
+        AppLog.w("AutoLoop", "ambiguous: " + labels.joinToString(" | "))
+        val pick = askAmbiguity(labels)
+        val chosen = top.getOrElse(pick) { top.first() }
+        AppLog.i("AutoLoop", "ambiguity chosen #$pick: ${chainLabel(chains[chosen])}")
+        // 用户确认 = 带真值的难例：帧 + 正确盘面落盘，供下一轮重训
+        SampleStore.save(
+            this, activeWatcher?.lastFrame(), chains[chosen].last().toFen(),
+            "ambiguity", diffCells(chains[chosen].first(), chains[chosen].last()),
+            labels.getOrElse(pick) { labels.firstOrNull() ?: "" })
+        return chosen
+    }
+
+    private suspend fun askAmbiguity(labels: List<String>): Int {
+        val answer = CompletableDeferred<Int>()
+        withContext(Dispatchers.Main) {
+            val dlg = AmbiguityDialog(this@AssistantService, labels)
+            dlg.onPick = { idx -> if (!answer.isCompleted) answer.complete(idx) }
+            ambiguityDialog = dlg
+            dlg.show()
+        }
+        val pick = withTimeoutOrNull(AMBIGUITY_TIMEOUT_MS) { answer.await() } ?: 0
+        withContext(Dispatchers.Main) { ambiguityDialog?.dismiss() }
+        ambiguityDialog = null
+        return pick
     }
 
     /** 最新待分析局面：结果回来时局面已变则丢弃，只服务最后一条 */
@@ -1718,6 +1820,9 @@ class AssistantService : Service() {
             }
             AppLog.i("Correct", "manual ${c.input} iccs=$iccs replace=${c.replace} " +
                 "moves=${recorder.moveCount()} fen=${c.cur.toFen().take(48)}")
+            // 用户纠正 = 带真值难例：落盘供下一轮重训
+            SampleStore.save(this@AssistantService, activeWatcher?.lastFrame(),
+                c.cur.toFen(), "correction", diffCells(c.prev, c.cur), "${c.input}")
             // 下一轮 autoLoop 以此为锚点重同步；同时强制全量重推，
             // 让 CNN 用纠正后的期望重新看这些格
             correctionRequested = c.cur

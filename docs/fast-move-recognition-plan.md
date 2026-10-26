@@ -265,11 +265,16 @@ loop:
   「重启对齐」与「implausible」两条路径；`dispatchAnalysis` 独立 job +
   `latestAnalysisFen` conflated 最新局面，识别循环不再 await 引擎。
 
-### S3：4 步扩展 + 歧义交互 + 数据飞轮
+### S3：歧义交互 + 数据飞轮（2026-10-26 完成）
 
 - 4 步 DFS 上限、候选去重、歧义提示；
 - 纠错弹窗预填“疑似序列”；
 - cap/origin 拒绝帧、MOVING 窗口自动落盘，端局颜色/类型硬负样本入库，下一轮重训。
+
+**已实现**：`SequenceSolver.solveAll`（最多 8 条解）+ `scoreByPlateaus`
+（落定平台消歧）+ `AmbiguityDialog`（列表式候选确认，20s 超时按第 1 条，
+10s 冷却防连弹）；确认/纠错样本落盘 `files/labels/`（PNG+meta+index.jsonl，
+上限 200 目录），拒帧在 `files/dump/` 附 `.json` 原因。重训留待样本积累后。
 
 ### S4：进程级引擎预热 + 渐进首搜 + 自适应
 

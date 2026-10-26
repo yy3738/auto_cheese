@@ -43,3 +43,7 @@ tools/out/*.csv
 tools/out/*.log
 tools/out/*.txt
 tools/out/*_old.json
+
+# 本地归档（诊断日志/旧发行包/旧模型），不进仓库
+archive/
+labels.tar

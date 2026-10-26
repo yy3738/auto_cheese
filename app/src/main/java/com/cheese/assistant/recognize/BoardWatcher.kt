@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import com.cheese.assistant.board.Piece
 import com.cheese.assistant.board.Position
 import com.cheese.assistant.capture.CellSampler
+import com.cheese.assistant.capture.MotionTracker
 import com.cheese.assistant.capture.ScreenCapture
 import java.io.File
 
@@ -235,6 +236,9 @@ class BoardWatcher(
         }
     }
 
+    /** 最近一帧画面（样本落盘用；只读，不可 recycle） */
+    fun lastFrame(): Bitmap? = lastBmp
+
     /** 停止采集流（识别循环退出/服务销毁时调用，避免监听器泄漏） */
     fun close() {
         // 只停自己的流：重试重建 watcher 时，旧协程的 finally 可能晚于
@@ -463,7 +467,9 @@ class BoardWatcher(
                     lastColorFixKey = key
                     AppLog.w("BoardWatcher", "expected-color fix: " +
                         cells.joinToString { "(${it / 9},${it % 9})→" +
-                            (expectedBoard.board[it]?.cnName ?: "?") })
+                            (expectedBoard.board[it]?.let { p ->
+                                (if (p.isRed) "红" else "黑") + p.cnName
+                            } ?: "?") })
                 }
             }
         } else if (expected != null) {
@@ -551,7 +557,8 @@ class BoardWatcher(
                     fallbackDisabled = false
                     mismatchRun = 0
                     return Observed(normalizeOrientation(repaired), userRed,
-                        warmth = frameWarmth).also { lastObserved = it }
+                        warmth = frameWarmth, window = settle?.window)
+                        .also { lastObserved = it }
                 }
             }
             return null
@@ -647,7 +654,8 @@ class BoardWatcher(
         anchorSnap = snapCur
         mismatchRun = 0
         return Observed(normalizedPruned, userRed, prunedThisFrame,
-            snapCur.clone(), snapAnchor?.clone(), frameWarmth).also { lastObserved = it }
+            snapCur.clone(), snapAnchor?.clone(), frameWarmth, settle?.window)
+            .also { lastObserved = it }
     }
 
     /** 识别成功的一帧：归一化局面 + 用户执方 + 裁剪/快照上下文 */
@@ -659,6 +667,8 @@ class BoardWatcher(
         val snapAnchor: IntArray? = null,
         /** 每格木色占比（raw 域）：棋子 0.56+，空位 0.02- */
         val warmth: FloatArray? = null,
+        /** 本帧来自哪个落定窗口（含平台变化格，供多解消歧；raw 域） */
+        val window: MotionTracker.Window? = null,
     )
 
     /** 每格中心 4×4 采样（覆盖约整格），灰度量化 8 级，抵消压缩/云影噪声 */
@@ -747,13 +757,19 @@ class BoardWatcher(
     /** 识别失败帧落盘（app 内部存储），adb pull 出来给 PC 端 diag 对比。
      *  轮转删除最旧——固定上限若不轮转, 早期帧永久占坑, 后续失败帧
      *  全部丢失(2026-10-17 实测 18:49 的 5 张占满, 20:32 的关键帧没存到) */
-    private fun dumpFrame(bmp: Bitmap) {
+    private fun dumpFrame(bmp: Bitmap, reason: String = "") {
         val dir = dumpDir ?: return
         runCatching {
             val files = dir.listFiles()?.sortedBy { it.name } ?: return
-            if (files.size >= DUMP_LIMIT) files.first().delete()
-            val f = File(dir, "mp_${System.currentTimeMillis()}.png")
+            if (files.size >= DUMP_LIMIT) files.first()?.delete()
+            val stamp = System.currentTimeMillis()
+            val f = File(dir, "mp_$stamp.png")
             f.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            // 侧车元数据：拒帧原因 + 期望局面（棋谱当前局面），供样本飞轮筛选
+            val expected = boardFallback?.invoke()?.toFen() ?: ""
+            File(dir, "mp_$stamp.json").writeText(
+                "{\"reason\":\"" + reason.replace("\"", "'") +
+                    "\",\"expected\":\"" + expected.replace("\"", "'") + "\"}")
             AppLog.e("BoardWatcher", "dumpFrame: ${f.name}")
         }.onFailure { AppLog.e("BoardWatcher", "dumpFrame failed", it) }
     }

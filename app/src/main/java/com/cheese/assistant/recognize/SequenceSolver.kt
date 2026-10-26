@@ -4,7 +4,7 @@ import com.cheese.assistant.board.Position
 import com.cheese.assistant.board.Zobrist
 
 /**
- * 多步走子序列还原（S2 后半，2026-10-23）。
+ * 多步走子序列还原（S2 后半，2026-10-23；S3 扩展为多解枚举，2026-10-26）。
  *
  * 用于"两次观测之间走了 3-4 手"的场景：循环重启、识别被暂停、快速连走。
  * 旧版只能解释 1-2 步（`legalStepPair` / `tryTwoSteps`），解释不了就留
@@ -18,56 +18,74 @@ import com.cheese.assistant.board.Zobrist
  *    到的格（允许同一子连走两步）；
  * 3. **落点必须与目标局面相关**：差异格，或双方局面都空的过渡格。
  *
- * 返回的局面链每一步都过 `XiangqiRules.canMove`，最后一项必须与目标
- * 完全一致（含轮走方）——**宁可返回 null 留缺口，也不猜一个走不到的序列**。
- * 多解时返回搜索到的第一条（任一条合法解释都比丢步好，因为终局盘面
- * 一定正确）。
+ * 每一步都过 `XiangqiRules.canMove`，最后一项必须与目标完全一致（含轮
+ * 走方）——**宁可返回空、留缺口，也不猜一个走不到的序列**。
+ *
+ * 多解（如"红走 A、黑走 B"与"红走 C、黑走 D"都能到达同一终局）时，
+ * `solveAll` 返回全部（上限 [maxSolutions]），由调用方用落定平台
+ * （[scoreByPlateaus]）消歧，仍歧义则交给用户确认。
  */
 object SequenceSolver {
 
     /**
-     * @param minPlies 最小步数（调用方已用 1/2 步快路径试过时传 3）
-     * @param maxPlies 最大步数上限
-     * @param nodeBudget 搜索节点上限（防慢机卡顿；超限即放弃，走缺口路径）
-     * @return 局面链（含起点，最后一项 == cur），无解返回 null
+     * @return 全部合法解（按步数从少到多）；无解返回空列表
      */
+    fun solveAll(
+        prev: Position,
+        cur: Position,
+        minPlies: Int = 1,
+        maxPlies: Int = 4,
+        maxSolutions: Int = 8,
+        nodeBudget: Int = 8_000,
+    ): List<List<Position>> {
+        if (prev.board.contentEquals(cur.board)) return emptyList()
+        val emptyBoth = BooleanArray(90) { prev.board[it] == null && cur.board[it] == null }
+        val budget = intArrayOf(nodeBudget)
+        val out = ArrayList<List<Position>>(maxSolutions)
+        val seenMoves = HashSet<String>()
+        for (depth in minPlies..maxPlies) {
+            if (budget[0] <= 0 || out.size >= maxSolutions) break
+            val chain = ArrayList<Position>(depth + 1).apply { add(prev) }
+            val moves = ArrayList<Int>(depth)
+            val seen = HashSet<Long>(256)
+            val transit = HashSet<Int>(4)
+            collect(chain, moves, cur, depth, emptyBoth, transit, budget, seen,
+                out, seenMoves, maxSolutions)
+        }
+        return out
+    }
+
+    /** 只要一条解（旧调用方兼容）：优先步数最少的第一条 */
     fun solve(
         prev: Position,
         cur: Position,
         minPlies: Int = 1,
         maxPlies: Int = 4,
         nodeBudget: Int = 8_000,
-    ): List<Position>? {
-        if (prev.board.contentEquals(cur.board)) return null
-        // 双方局面都空的格 = 可能的"过渡格"（子先挪开、后面再落别处）
-        val emptyBoth = BooleanArray(90) { prev.board[it] == null && cur.board[it] == null }
-        val budget = intArrayOf(nodeBudget)
-        val chain = ArrayList<Position>(maxPlies + 1)
-        chain.add(prev)
-        for (depth in minPlies..maxPlies) {
-            if (budget[0] <= 0) break
-            val seen = HashSet<Long>(256)
-            val transit = HashSet<Int>(4)
-            dfs(chain, cur, depth, emptyBoth, transit, budget, seen)?.let { return it }
-        }
-        return null
-    }
+    ): List<Position>? = solveAll(prev, cur, minPlies, maxPlies, 1, nodeBudget).firstOrNull()
 
-    private fun dfs(
+    private fun collect(
         chain: MutableList<Position>,
+        moves: MutableList<Int>,
         target: Position,
         left: Int,
         emptyBoth: BooleanArray,
         transit: MutableSet<Int>,
         budget: IntArray,
         seen: MutableSet<Long>,
-    ): List<Position>? {
+        out: MutableList<List<Position>>,
+        seenMoves: MutableSet<String>,
+        maxSolutions: Int,
+    ) {
+        if (out.size >= maxSolutions || budget[0] <= 0) return
         val last = chain.last()
         val board = last.board
         if (last.redToMove == target.redToMove && board.contentEquals(target.board)) {
-            return chain.toList()
+            val sig = moves.joinToString(",")
+            if (seenMoves.add(sig)) out.add(chain.toList())
+            return
         }
-        if (left <= 0 || budget[0]-- <= 0) return null
+        if (left <= 0 || budget[0]-- <= 0) return
 
         val diff = BooleanArray(90)
         var diffCount = 0
@@ -75,11 +93,11 @@ object SequenceSolver {
             if (board[i] != target.board[i]) { diff[i] = true; diffCount++ }
         }
         // 盘面已同但轮走方不符：本支路无解（轮走方由步数奇偶决定）
-        if (diffCount == 0) return null
-        if (diffCount > 2 * left) return null
+        if (diffCount == 0) return
+        if (diffCount > 2 * left) return
 
         val key = Zobrist.of(board, last.redToMove) * 7 + left
-        if (!seen.add(key)) return null
+        if (!seen.add(key)) return
 
         val moverRed = last.redToMove
         val froms = ArrayList<Int>(12)
@@ -104,13 +122,51 @@ object SequenceSolver {
                 nb[t] = piece
                 nb[f] = null
                 chain.add(Position(nb, !moverRed))
+                moves.add(f * 90 + t)
                 val added = transit.add(t)
-                val r = dfs(chain, target, left - 1, emptyBoth, transit, budget, seen)
+                collect(chain, moves, target, left - 1, emptyBoth, transit, budget,
+                    seen, out, seenMoves, maxSolutions)
                 if (added) transit.remove(t)
-                if (r != null) return r
+                moves.removeAt(moves.size - 1)
                 chain.removeAt(chain.size - 1)
+                if (out.size >= maxSolutions || budget[0] <= 0) return
             }
         }
-        return null
     }
+
+    /**
+     * 用落定平台给候选序列打分：每个平台的变化格集合（相对窗口起点）若
+     * 等于某个"前 j 步"的变化格集合，记 1 分。分高者更可能是真实顺序。
+     *
+     * @param plateaus 平台变化格（raw 屏幕方向，来自 MotionTracker）
+     * @param flip 识别局面是否上下翻转（normalized→raw）
+     */
+    fun scoreByPlateaus(
+        chain: List<Position>,
+        plateaus: List<BooleanArray>,
+        flip: Boolean = false,
+    ): Int {
+        if (plateaus.isEmpty() || chain.size < 2) return 0
+        val n = chain.size - 1
+        val prefix = ArrayList<BooleanArray>(n)
+        for (j in 1..n) {
+            val set = BooleanArray(90)
+            for (i in 0 until 90) set[i] = chain[j].board[i] != chain[0].board[i]
+            prefix.add(set)
+        }
+        var score = 0
+        for (p in plateaus) {
+            for (set in prefix) {
+                var same = true
+                for (i in 0 until 90) {
+                    val want = if (flip) set[flipIndex(i)] else set[i]
+                    if (want != p[i]) { same = false; break }
+                }
+                if (same) { score++; break }
+            }
+        }
+        return score
+    }
+
+    private fun flipIndex(i: Int): Int = (9 - i / 9) * 9 + i % 9
 }

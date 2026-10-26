@@ -59,7 +59,7 @@ internal fun dedupCandidates(list: List<Candidate>): List<Candidate> {
  * 引擎控制器：管理 Pikafish 生命周期，把一次限时搜索封装为挂起函数。
  */
 class SearchController(
-    private val movetimeMs: Int = 600,
+    private val movetimeMs: Int = 900,
     private val multiPv: Int = 3,
     private val threads: Int = 3,
 ) {
