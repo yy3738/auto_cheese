@@ -42,7 +42,6 @@ import com.cheese.assistant.util.SampleStore
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import com.cheese.assistant.recognize.TemplateStore
-import com.cheese.assistant.review.saveToKnowledge
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -431,6 +430,7 @@ class AssistantService : Service() {
             return
         }
         autoJob = serviceScope.launch(Dispatchers.IO) {
+            com.cheese.assistant.review.ReviewGate.liveActive = true
             val grid = BoardGrid.load(this@AssistantService, TARGET_APP)
             if (grid == null) {
                 withContext(Dispatchers.Main) { showOverlay("未找到校准,请先在主界面校准棋盘") }
@@ -1175,6 +1175,7 @@ class AssistantService : Service() {
                 // 停掉帧环监听（重试/纠错会重建 watcher，不关会叠监听器）
                 watcher.close()
                 if (activeWatcher === watcher) activeWatcher = null
+                com.cheese.assistant.review.ReviewGate.liveActive = false
             }
         }
     }
@@ -1574,29 +1575,27 @@ class AssistantService : Service() {
     /** 封存按钮：对局中=封存并复盘；复盘完成后按钮隐藏，回到只有「开局」的局前态 */
     private fun onSealButton() {
         AppLog.d("Seal", "click reviewActive=${reviewJob?.isActive}")
-        // 复盘进行中的点击先拦(曾经 await 标志在协程内延迟置位,连点被
-        // 误判为"下一局"重置棋谱+抢复盘引擎)
-        if (reviewJob?.isActive == true) {
-            serviceScope.launch {
-                withContext(Dispatchers.Main) { overlayView?.showReviewingMode() }
-            }
+        if (reviewJob?.isActive == true) return
+        if (recorder.isEmpty) {
+            sealAndReview(doReview = false)   // 空棋谱走原有提示分支
             return
         }
-        sealAndReview()
+        // 2026-10-27 用户要求：点「结」先问"是否复盘"，不需要就不跑复盘
+        val count = recorder.moveCount()
+        serviceScope.launch(Dispatchers.Main) {
+            SealDialog(this@AssistantService, count) { doReview ->
+                sealAndReview(doReview)
+            }.show()
+        }
     }
 
     /**
-     * 封存当前对局并触发复盘（CONTEXT.md"对局边界=手动封存"）。
-     * 停掉自动循环（引擎独占给复盘），棋谱入库，逐局面 3000ms 深搜，
-     * 结论写 games.review_json 与知识库。复盘完成后 recorder 重置。
+     * 封存并**异步复盘**（2026-10-27）：
+     * 棋谱入库 + 清当前局后立即回到局前态，用户可以马上开下一局；
+     * 复盘交给进程级 `ReviewRunner`（实战期间在局面边界让路，完成发通知）。
      */
-    private fun sealAndReview() {
-        if (reviewJob?.isActive == true) {
-            serviceScope.launch {
-                withContext(Dispatchers.Main) { overlayView?.showReviewingMode() }
-            }
-            return
-        }
+    private fun sealAndReview(doReview: Boolean) {
+        if (reviewJob?.isActive == true) return
         if (recorder.isEmpty) {
             // 对局刚结束的结算页垃圾帧会触发"3 次异常重置",棋谱在点「结」
             // 前几秒被清——孤儿备份(不过期)立即救回,照常复盘
@@ -1608,95 +1607,103 @@ class AssistantService : Service() {
             AppLog.w("SealReview", "no moves recorded, skip → back to idle")
             serviceScope.launch {
                 withContext(Dispatchers.Main) {
-                    // 反馈契约:成功→复盘+回到局前;失败→必须显式可见。
-                    // Toast 硬保险 + 降级条持久(瞬态 body 会被识别循环覆盖)
                     Toast.makeText(this@AssistantService,
                         "封存失败:本局没有识别到任何走子记录", Toast.LENGTH_LONG).show()
                     showOverlay("尚无对局记录")
                     overlayView?.setDegraded(
                         "封存失败:本局没有识别到任何走子记录" +
                             "(识别整局失败,或上一局已复盘过)")
-                    // 四态闭环：没有可复盘内容，回到只有「开局」的局前态
                     overlayView?.setGameStarted(false)
                 }
             }
             return
         }
-        // 棋谱快照与状态标志同步落定:复盘启动瞬间按钮就切「复盘中…」,
-        // 复盘期间所有点击被 onSealButton 的 review 检查拦下,不丢不误触
         paused = false
         resumeResync = false
         val moves = recorder.movesSnapshot()
         val userIsRed = recorder.userIsRed
-        serviceScope.launch {
-            withContext(Dispatchers.Main) {
-                showOverlay("复盘中:${moves.size}步...")
-                overlayView?.showReviewingMode()
-            }
-        }
+        val startedAt = recorder.startedAt
+        val moveJson = recorder.toJson()
         reviewJob = serviceScope.launch(Dispatchers.IO) {
-            // 库补齐/在跑的分析都停掉：复盘要独占引擎
+            // 停掉实战相关任务；复盘在后台让路，不再独占引擎
             bookFillJob?.cancel()
             bookFillJob = null
             analysisJob?.cancel()
             analysisJob = null
             latestAnalysisFen = ""
-            // 确保识别循环彻底退出(进行中的搜索要跑完native轮询)再复盘
             autoJob?.cancelAndJoin()
             autoJob = null
             val game = com.cheese.assistant.db.GameEntity(
-                startedAt = recorder.startedAt,
+                startedAt = startedAt,
                 endedAt = System.currentTimeMillis(),
                 userIsRed = userIsRed,
-                moveListJson = recorder.toJson(),
+                moveListJson = moveJson,
             )
             val db = AppDb.get(this@AssistantService)
             val gameId = runCatching { db.gameDao().insert(game) }
                 .onFailure { AppLog.e("SealReview", "insert game failed", it) }
                 .getOrNull()
-            val ctl = ensureController()
-            if (ctl == null || gameId == null) {
-                AppLog.w("SealReview",
-                    "engine/db unavailable ctl=${ctl != null} gameId=$gameId → back to idle")
+            if (gameId == null) {
+                AppLog.w("SealReview", "db unavailable, seal failed")
                 withContext(Dispatchers.Main) {
-                    showOverlay("复盘失败:引擎不可用")
-                    // 四态闭环：失败的复盘不能停在「复盘中」，回到局前态
+                    Toast.makeText(this@AssistantService,
+                        "封存失败：数据库不可用", Toast.LENGTH_LONG).show()
                     overlayView?.setGameStarted(false)
                 }
                 return@launch
             }
-            val reviewStart = System.currentTimeMillis()
-            val reviewer = com.cheese.assistant.review.GameReviewer(ctl)
-            val reviews = runCatching {
-                reviewer.review(moves, userIsRed) { done, total ->
-                    AppLog.d("SealReview", "progress $done/$total")
-                    withContext(Dispatchers.Main) {
-                        // 模拟器每个 3000ms 搜索实际 6s+，必须让用户看到
-                        // 进度在走，否则「复盘中」像卡死（2026-10-22 反馈）。
-                        // 2026-10-23：按钮也带 X/Y，短局 1/1 不再像没反应
-                        val secs = (System.currentTimeMillis() - reviewStart) / 1000
-                        showOverlay("复盘 $done/$total 个局面 · 已用 ${secs}s")
-                        overlayView?.setReviewProgress(done, total)
-                    }
-                }
-            }.onFailure { AppLog.e("SealReview", "review failed", it) }
-                .getOrDefault(emptyList())
-            runCatching { saveToKnowledge(db, reviews) }
-            val mistakes = reviews.count { it.blunderLevel == 1 }
-            val majors = reviews.count { it.blunderLevel == 2 }
-            db.gameDao().finishReview(
-                gameId, com.cheese.assistant.db.GameEntity.STATUS_DONE,
-                com.cheese.assistant.review.reviewsToJson(reviews), mistakes, majors)
+            // 立即回到局前态：清当前局、按钮回「开局」，复盘交给后台
             recorder.reset()
             GameLiveState.clear()
+            if (!doReview) {
+                db.gameDao().finishReview(
+                    gameId, com.cheese.assistant.db.GameEntity.STATUS_SKIPPED,
+                    "[]", 0, 0)
+                AppLog.i("SealReview",
+                    "sealed moves=${moves.size} gameId=$gameId → no review")
+                withContext(Dispatchers.Main) {
+                    showOverlay("已封存 ${moves.size} 步（未复盘）")
+                    overlayView?.setGameStarted(false)
+                    Toast.makeText(this@AssistantService,
+                        "已封存（未复盘）", Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
             AppLog.i("SealReview",
-                "review done moves=${moves.size} mistakes=$mistakes majors=$majors " +
-                    "cost=${System.currentTimeMillis() - reviewStart}ms")
+                "sealed moves=${moves.size} gameId=$gameId → async review")
             withContext(Dispatchers.Main) {
-                showOverlay("复盘完成\n失误$mistakes 大漏着$majors\n(主界面「对局复盘」查看)")
-                // 四态闭环：复盘完成回到局前态，只剩「开局」
+                showOverlay("已封存 ${moves.size} 步\n后台复盘中，可点「开局」开新局")
                 overlayView?.setGameStarted(false)
-                AppLog.i("SealReview", "back to idle (open button only)")
+                Toast.makeText(this@AssistantService,
+                    "已封存，后台复盘开始（完成后通知）", Toast.LENGTH_LONG).show()
+            }
+            com.cheese.assistant.review.ReviewRunner.start(
+                this@AssistantService, gameId, moves, userIsRed)
+            watchReviewProgress()
+        }
+    }
+
+    /** 后台复盘期间在悬浮窗正文显示进度；开新局后不覆盖推荐区 */
+    private fun watchReviewProgress() {
+        serviceScope.launch {
+            val rr = com.cheese.assistant.review.ReviewRunner
+            while (rr.running || rr.isRunning) {
+                val d = rr.done
+                val t = rr.total
+                if (t > 0) {
+                    withContext(Dispatchers.Main) {
+                        if (recorder.moveCount() == 0 &&
+                            overlayView?.showingSuggestions != true) {
+                            showOverlay("后台复盘 $d/$t\n可点「开局」开新局")
+                        }
+                    }
+                }
+                delay(1000)
+            }
+            withContext(Dispatchers.Main) {
+                if (recorder.moveCount() == 0 && overlayView?.showingSuggestions != true) {
+                    showOverlay("复盘完成\n(主界面「对局复盘」查看)")
+                }
             }
         }
     }

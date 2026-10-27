@@ -369,32 +369,6 @@ class OverlayView(context: Context) : LinearLayout(context) {
         suggestionContainer.alpha = if (degraded) 0.4f else 1f
     }
 
-    /** 复盘进行中:按钮转灰蓝"复盘中",明确反馈已受理(完成时回到「开局」态) */
-    fun showReviewingMode() {
-        newGameButton.visibility = GONE
-        pauseButton.visibility = GONE
-        correctButton.visibility = GONE
-        liveButton.visibility = GONE
-        sealButton.visibility = VISIBLE
-        sealButton.text = "复盘中"
-        sealButton.setTextColor(0xFFFFFFFF.toInt())
-        sealButton.setPadding(dp(10), dp(2), dp(10), dp(2))
-        sealButton.background = pill(colorNavySoft.toLong())
-    }
-
-    /** 复盘进度:按钮直接显示「复盘X/Y」——短局 1/1 也能看出已受理并完成 */
-    fun setReviewProgress(done: Int, total: Int) {
-        newGameButton.visibility = GONE
-        pauseButton.visibility = GONE
-        correctButton.visibility = GONE
-        liveButton.visibility = GONE
-        sealButton.visibility = VISIBLE
-        sealButton.text = "复盘$done/$total"
-        sealButton.setTextColor(0xFFFFFFFF.toInt())
-        sealButton.setPadding(dp(8), dp(2), dp(8), dp(2))
-        sealButton.background = pill(colorNavySoft.toLong())
-    }
-
     /** 新一局开始:从"下一局"态复位为对局中的"结" */
     fun resetSealButton() {
         sealButton.text = "结"

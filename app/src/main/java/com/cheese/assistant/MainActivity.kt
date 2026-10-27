@@ -37,6 +37,14 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         com.cheese.assistant.util.AppLog.start(applicationContext)
         com.cheese.assistant.util.AppLog.i("Main", "activity created")
+        // Android 13+ 通知权限默认拒绝：不申请的话前台服务通知和
+        // 「复盘完成」通知都会被系统静默丢弃（2026-10-27 实测）
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 3001)
+        }
 
         boardView = findViewById(R.id.boardView)
         resultView = findViewById(R.id.resultView)

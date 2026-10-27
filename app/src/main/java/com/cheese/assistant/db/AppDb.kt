@@ -41,6 +41,12 @@ data class GameEntity(
         const val RESULT_DRAW = "和"
         const val STATUS_REVIEWING = "reviewing"
         const val STATUS_DONE = "done"
+
+        /** 已封存但用户选择不复盘（2026-10-27） */
+        const val STATUS_SKIPPED = "skipped"
+
+        /** 复盘中途进程被杀/中断（2026-10-27） */
+        const val STATUS_INTERRUPTED = "interrupted"
     }
 }
 
@@ -75,6 +81,9 @@ interface GameDao {
 
     @Query("UPDATE games SET review_status = :status, review_json = :reviewJson, blunder_count = :blunders, blunder_count_major = :major WHERE id = :id")
     suspend fun finishReview(id: Long, status: String, reviewJson: String, blunders: Int, major: Int)
+
+    @Query("SELECT * FROM games WHERE review_status = :status")
+    suspend fun byStatus(status: String): List<GameEntity>
 
     @Query("SELECT * FROM games ORDER BY id DESC")
     fun allGames(): Flow<List<GameEntity>>

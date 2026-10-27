@@ -62,6 +62,10 @@ class GameReviewer(private val controller: SearchController) {
         moves: List<MoveRecord>,
         userIsRed: Boolean,
         onProgress: suspend (done: Int, total: Int) -> Unit = { _, _ -> },
+        /** 每个局面开始前的让路钩子（异步复盘：实战优先，等实战空闲） */
+        yieldGate: suspend () -> Unit = {},
+        /** 单局面时长（共用引擎时降速，最坏只让实战等一次搜索） */
+        movetimeFor: () -> Int = { REVIEW_MOVETIME },
     ): List<PositionReview> {
         val targets = moves.filter { m ->
             val redToMove = m.fenBefore.substringAfter(' ').startsWith("w")
@@ -71,8 +75,9 @@ class GameReviewer(private val controller: SearchController) {
         onProgress(0, total)
         val out = ArrayList<PositionReview>()
         for ((idx, m) in targets.withIndex()) {
+            yieldGate()
             onProgress(idx, total)
-            val r = analyzePosition(m.fenBefore, m.iccs, userIsRed)
+            val r = analyzePosition(m.fenBefore, m.iccs, userIsRed, movetimeFor())
             if (r != null) out.add(r)
             onProgress(idx + 1, total)
         }
@@ -83,13 +88,14 @@ class GameReviewer(private val controller: SearchController) {
         fen: String,
         playedIccs: String,
         userIsRed: Boolean,
+        movetime: Int,
     ): PositionReview? {
-        val r1 = controller.search(fen, REVIEW_MOVETIME, REVIEW_MULTIPV)
+        val r1 = controller.search(fen, movetime, REVIEW_MULTIPV)
         val played = r1.candidates.firstOrNull { it.pv.firstOrNull() == playedIccs }
         val best = r1.best
         // 用户着法不在候选里：以更宽 MultiPV 重搜一次把用户着法包进来
         if (played == null) {
-            val r2 = controller.search(fen, REVIEW_MOVETIME, WIDE_MULTIPV)
+            val r2 = controller.search(fen, movetime, WIDE_MULTIPV)
             val wideBest = r2.best
             val widePlayed = r2.candidates.firstOrNull { it.pv.firstOrNull() == playedIccs }
             if (wideBest != null && widePlayed != null) {

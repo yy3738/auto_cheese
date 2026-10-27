@@ -64,6 +64,13 @@ class ReviewActivity : Activity() {
                 render()
             }
         }
+        // 复盘进行中数据库不变化，靠这个 ticker 每秒刷新 x/y（2026-10-27）
+        scope.launch {
+            while (true) {
+                if (ReviewRunner.running || ReviewRunner.isRunning) render()
+                kotlinx.coroutines.delay(1000)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -115,13 +122,23 @@ class ReviewActivity : Activity() {
                 }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 addView(TextView(this@ReviewActivity).apply {
                     text = when {
-                        g.reviewStatus != GameEntity.STATUS_DONE -> "复盘中"
+                        g.reviewStatus == GameEntity.STATUS_INTERRUPTED -> "复盘中断"
+                        g.reviewStatus == GameEntity.STATUS_SKIPPED -> "未复盘"
+                        g.reviewStatus != GameEntity.STATUS_DONE &&
+                            g.id == ReviewRunner.currentGameId &&
+                            ReviewRunner.total > 0 ->
+                            "复盘 ${ReviewRunner.done}/${ReviewRunner.total}"
+                        g.reviewStatus != GameEntity.STATUS_DONE &&
+                            g.id == ReviewRunner.currentGameId -> "复盘中"
+                        g.reviewStatus != GameEntity.STATUS_DONE -> "等待复盘"
                         blunders > 0 -> "⚠ $blunders"
                         else -> "✓"
                     }
                     textSize = 13f
                     setTextColor(
                         when {
+                            g.reviewStatus == GameEntity.STATUS_INTERRUPTED -> 0xFFB7791F.toInt()
+                            g.reviewStatus == GameEntity.STATUS_SKIPPED -> 0xFF94A3B8.toInt()
                             g.reviewStatus != GameEntity.STATUS_DONE -> 0xFF64748B.toInt()
                             blunders >= 3 -> 0xFFB3352B.toInt()
                             blunders > 0 -> 0xFFB7791F.toInt()

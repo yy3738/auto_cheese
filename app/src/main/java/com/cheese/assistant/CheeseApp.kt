@@ -15,5 +15,7 @@ class CheeseApp : Application() {
         AppLog.start(this)
         // 进程级引擎预热（S4）：用户打开 App 就开始加载 NNUE，点开局时多半已就绪
         EngineHolder.prewarm(this)
+        // 上次进程被杀时正在复盘的对局标成「复盘中断」，避免永远显示「复盘中」
+        com.cheese.assistant.review.ReviewRunner.recoverStale(this)
     }
 }
