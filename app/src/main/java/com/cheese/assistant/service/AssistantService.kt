@@ -12,6 +12,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.graphics.PixelFormat
 import android.os.IBinder
+import android.os.PowerManager
 import android.widget.Toast
 import android.util.TypedValue
 import android.view.Gravity
@@ -26,6 +27,7 @@ import com.cheese.assistant.board.ThreatMarker
 import com.cheese.assistant.board.Zobrist
 import com.cheese.assistant.capture.ScreenCapture
 import com.cheese.assistant.db.AppDb
+import com.cheese.assistant.engine.EngineHolder
 import com.cheese.assistant.engine.SearchController
 import com.cheese.assistant.recognize.BoardGrid
 import com.cheese.assistant.recognize.BoardWatcher
@@ -77,9 +79,6 @@ class AssistantService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var overlayView: OverlayView? = null
-    @Volatile private var controller: SearchController? = null
-    /** 引擎初始化互斥：onCreate 预热与首帧分析可能并发 */
-    private val controllerMutex = Mutex()
     private var autoJob: Job? = null
     private var reviewJob: Job? = null
 
@@ -96,6 +95,11 @@ class AssistantService : Service() {
     /** 歧义确认弹窗（S3）：同一时刻只一个；10s 内不重复弹 */
     private var ambiguityDialog: AmbiguityDialog? = null
     private var lastAmbiguityAt = 0L
+
+    /** 局中暂停（2026-10-26）：只停采集/推荐，保留棋谱与投屏 */
+    @Volatile private var paused = false
+    /** 暂停后继续：首帧只重同步、不把暂停期间（沙盘）的走子记账 */
+    @Volatile private var resumeResync = false
     private val recorder: com.cheese.assistant.review.GameRecorder by lazy {
         com.cheese.assistant.review.GameRecorder().also { r ->
             val stateDir = java.io.File(filesDir, "state")
@@ -170,6 +174,7 @@ class AssistantService : Service() {
         }
         when (intent.action) {
             Action.STOP -> {
+                AppLog.i("AssistantService", "STOP action received")
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putBoolean(PREF_AUTO_ON, false).apply()
                 stopSelf()
@@ -238,13 +243,13 @@ class AssistantService : Service() {
     }
 
     override fun onDestroy() {
+        AppLog.i("AssistantService", "destroyed")
         isRunning = false
         autoJob?.cancel()
         autoJob = null
         removeOverlay()
         serviceScope.cancel()
-        controller?.shutdown()
-        controller = null
+        // 引擎是进程级（EngineHolder），停止服务不释放：下次开局直接可用
         // 投屏属于本次服务会话：停止服务必须释放，否则 ScreenCapture.isRunning
         // 是假状态，下次启动会拿着已失效的 MediaProjection 空转（Android 14
         // 停止前台服务后投屏随即失效）。释放后下次开启会重新走授权。
@@ -261,20 +266,30 @@ class AssistantService : Service() {
         }
     }
 
-    private suspend fun ensureController(announce: Boolean = true): SearchController? =
-        controllerMutex.withLock {
-        controller?.let { return@withLock it }
-        // 后台预热/库补齐不要改悬浮窗正文：局前只有「开局」，识别未启动时
-        // 任何"引擎启动中"都是噪音（2026-10-23 用户要求）
-        if (announce) withContext(Dispatchers.Main) { showOverlay("引擎启动中...") }
-        val c = SearchController()
-        val ok = c.start(applicationContext)
-        if (!ok) {
-            runCatching { c.shutdown() }
-            return@withLock null
+    /**
+     * 进程级引擎（EngineHolder）：就绪即返回；加载中显示「预热中 Xs」，
+     * `announce=false` 供后台预热/库补齐使用，不抢悬浮窗正文。
+     */
+    private suspend fun ensureController(announce: Boolean = true): SearchController? {
+        EngineHolder.controllerOrNull?.let { return it }
+        var statusJob: Job? = null
+        if (announce) {
+            statusJob = serviceScope.launch(Dispatchers.Main) {
+                while (EngineHolder.isLoading) {
+                    showOverlay("引擎预热中 ${EngineHolder.loadingSeconds()}s…")
+                    delay(1000)
+                }
+            }
         }
-        controller = c
-        c
+        val c = EngineHolder.ensure(this)
+        statusJob?.cancel()
+        if (c == null && announce) {
+            AppLog.e("AssistantService", "engine unavailable: ${EngineHolder.lastError}")
+            withContext(Dispatchers.Main) {
+                showOverlay("引擎不可用：${EngineHolder.lastError ?: "加载失败"}")
+            }
+        }
+        return c
     }
 
     /** 单条候选:着法文本/评分/威胁级别/原始move */
@@ -287,6 +302,18 @@ class AssistantService : Service() {
         ThreatMarker.Level.CAPTURE -> ThreatLevel.CAPTURE
         ThreatMarker.Level.THREAT_CHECK -> ThreatLevel.THREAT_CHECK
         ThreatMarker.Level.CHECK -> ThreatLevel.CHECK
+    }
+
+    /** 引擎原始候选 → 悬浮窗候选（评分文本 + 中文着法 + 威胁级） */
+    private fun rawToCandidates(
+        fen: String,
+        raw: List<com.cheese.assistant.engine.Candidate>,
+    ): List<Candidate> = raw.map { c ->
+        val move = c.pv.first()
+        val score = c.mateIn?.let { m -> if (m > 0) "杀 $m" else "被杀 $m" }
+            ?: String.format("%+.1f", c.scoreCp!! / 100.0)
+        Candidate("$score  ${MoveFormatter.toChinese(fen, move)}", move,
+            threatLevelOf(ThreatMarker.of(fen, move)))
     }
 
     private suspend fun analyzeCandidates(fen: String): List<Candidate> {
@@ -323,13 +350,8 @@ class AssistantService : Service() {
                 "fen=${fen.take(32)}")
             // 局面非法(幻影子/缺王)时引擎拒绝搜索:明确提示,不留旧推荐误导
             if (result.failed) listOf(Candidate("局面异常,重新定位中...", "", ThreatLevel.NONE))
-            else result.candidates.map { c ->
-                val move = c.pv.first()
-                val score = c.mateIn?.let { m -> if (m > 0) "杀 $m" else "被杀 $m" }
-                    ?: String.format("%+.1f", c.scoreCp!! / 100.0)
-                val threat = threatLevelOf(ThreatMarker.of(fen, move))
-                Candidate("$score  ${MoveFormatter.toChinese(fen, move)}", move, threat)
-            }.ifEmpty { listOf(Candidate("无结果", "", ThreatLevel.NONE)) }
+            else rawToCandidates(fen, result.candidates)
+                .ifEmpty { listOf(Candidate("无结果", "", ThreatLevel.NONE)) }
         } catch (t: Throwable) {
             listOf(Candidate("搜索失败: ${t.message}", "", ThreatLevel.NONE))
         }
@@ -372,7 +394,7 @@ class AssistantService : Service() {
                 return@launch
             }
             val merged = listOf(book) + extras.take(2)
-            lastSuggestions = merged
+            rememberSuggestions("$fen|true", merged)
             GameLiveState.setCandidates(taggedCandidateLines(merged))
             repaintSuggestions(merged)
             AppLog.d("AutoLoop", "book fill done: +${extras.take(2).size} candidates")
@@ -464,6 +486,12 @@ class AssistantService : Service() {
                 // 边条指纹采样跳过悬浮窗自身矩形: 悬浮窗文字每帧变化,
                 // 旧版把它当"非对局页面", 每 20s 假暂停一轮识别
                 overlayBounds = { overlayView?.boundsOnScreen() },
+                interactiveCheck = {
+                    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    val km = getSystemService(Context.KEYGUARD_SERVICE)
+                        as android.app.KeyguardManager
+                    pm.isInteractive && !km.isKeyguardLocked
+                },
             )
             activeWatcher = watcher
             // 引擎已在 onCreate 预热；这里不阻塞识别循环。若尚未就绪，
@@ -690,6 +718,27 @@ class AssistantService : Service() {
                 }
                 when {
                     prev == null -> {
+                        // 暂停后继续（2026-10-26）：只重同步，不把暂停期间
+                        // （JJ 沙盘/摆子）的操作记进棋谱——留缺口并提示。
+                        if (resumeResync) {
+                            resumeResync = false
+                            AppLog.i("AutoLoop",
+                                "resume resync: 暂停期间操作不记账, pieces=" +
+                                    pos.board.count { it != null })
+                            recorder.setCurrentPosition(
+                                Position(pos.board.copyOf(), redToMove))
+                            recorder.start(pos, observed.userIsRed)
+                            last = pos
+                            lastSnap = observed.snapCur
+                            redToMove = recorder.userIsRed
+                            syncSideButton()
+                            withContext(Dispatchers.Main) {
+                                overlayView?.setDegraded(
+                                    "已重同步（暂停期间的走子未记账）")
+                            }
+                            postAnalysis(pos, redToMove)
+                            continue@autoloop
+                        }
                         // 循环重启（重试/纠错/服务恢复）先与棋谱对齐：
                         // 旧版直接 recorder.start(pos) 会把重启前走掉的
                         // 1-2 步静默跳过（2026-10-22 实测：进黑车+平红车
@@ -800,13 +849,18 @@ class AssistantService : Service() {
                     }
                     pos.board.contentEquals(prev.board) -> {
                         vanishRun = 0
-                        // 从实况页/结算页切回:期间"等待稳定棋盘画面"等文本态
-                        // 已把推荐区清空,而局面没变不会触发 postAnalysis 的
-                        // dedup 回填——这里用最近一次候选回填(同一恢复路径)
-                        if (lastSuggestions.isNotEmpty() &&
+                        // 恢复推荐区：必须只恢复**当前局面**的候选。
+                        // 旧版用全局 lastSuggestions，对手刚落子后会把上一步
+                        // （你走之前）的推荐刷回来（2026-10-26 用户实测 17:42）。
+                        val fenNow = Position(pos.board, redToMove).toFen()
+                        val keyNow = "$fenNow|${redToMove == recorder.userIsRed}"
+                        val cached = suggestionCache[keyNow]
+                        if (!cached.isNullOrEmpty() &&
                             overlayView?.showingSuggestions != true) {
-                            AppLog.d("AutoLoop", "restore suggestions after screen switch")
-                            repaintSuggestions()
+                            AppLog.d("AutoLoop",
+                                "restore suggestions (position match, n=${cached.size})")
+                            lastSuggestions = cached
+                            repaintSuggestions(cached)
                         }
                         delay(250)
                     }
@@ -1170,6 +1224,22 @@ class AssistantService : Service() {
     // 单槽去重会被交替冲穿(上次只记一个 FEN),保留最近 8 个彻底消除重复计算
     private val analyzedKeys = ArrayDeque<String>()
 
+    /**
+     * 每个"局面|轮到用户"的最近候选（2026-10-26 修复）：恢复推荐区显示时
+     * 必须只显示**与当前局面匹配**的候选。以前用全局 lastSuggestions，
+     * 对手刚落子后"恢复推荐"会把上一步（你走之前的）推荐刷回来。
+     */
+    private val suggestionCache = object : LinkedHashMap<String, List<Candidate>>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, List<Candidate>>,
+        ): Boolean = size > 8
+    }
+
+    private fun rememberSuggestions(key: String, cands: List<Candidate>) {
+        lastSuggestions = cands
+        suggestionCache[key] = cands
+    }
+
     // 悬浮窗最近一次有效文本:识别抖动刷掉候选("等待稳定棋盘画面...")后,
     // 识别恢复时用它原样恢复——analyzedKeys 去重会挡住 postAnalysis 重算
     private var lastOverlayText: String? = null
@@ -1247,12 +1317,14 @@ class AssistantService : Service() {
             replay?.board?.contentEquals(pos.board),
         )
         if (key in analyzedKeys) {
-            // dedup 命中=局面没变,悬浮窗应仍挂着上次推荐;若被"对手回合/
-            // 分析中"等文本态覆盖(不数子节点数——文本节点也在容器里),
-            // 把最近一次候选回填,局面没变,正确推荐就是它们
-            if (lastSuggestions.isNotEmpty() && overlayView?.showingSuggestions != true) {
-                AppLog.w("AutoLoop", "dedup hit with hidden suggestions, re-posting")
-                repaintSuggestions()
+            // dedup 命中=局面没变；只有该局面自己的候选才恢复
+            // （旧版用全局 lastSuggestions，可能把别的位置的推荐刷回来）
+            val cached = suggestionCache[key]
+            if (!cached.isNullOrEmpty() && overlayView?.showingSuggestions != true) {
+                AppLog.w("AutoLoop",
+                    "dedup hit with hidden suggestions, re-posting n=${cached.size}")
+                lastSuggestions = cached
+                repaintSuggestions(cached)
             }
             return
         }
@@ -1362,6 +1434,9 @@ class AssistantService : Service() {
         latestAnalysisFen = fen
         analysisJob?.cancel()
         analysisJob = serviceScope.launch(Dispatchers.IO) {
+            // 只出一次结果（2026-10-26 用户反馈）：渐进上屏 + 浅深度补搜会让
+            // 候选"先出一批、过一会儿又换一批、顺序还变"。取消两者，
+            // 基础 movetime 提到 1200ms 补深度，推荐列表稳定不闪。
             val candidates = analyzeCandidates(fen)
             if (latestAnalysisFen != fen) {
                 AppLog.d("AutoLoop", "analysis dropped (stale) ${fen.take(24)}")
@@ -1384,7 +1459,7 @@ class AssistantService : Service() {
             // 候选落盘:ICCS+中文+威胁级,排查着法文本/徽章误标(如两条同名"炮2平4")
             AppLog.i("AutoLoop", "candidates $key " +
                 candidates.joinToString(" | ") { "${it.iccs}→${it.line}[${it.threat}]" })
-            lastSuggestions = candidates
+            rememberSuggestions(key, candidates)
             GameLiveState.setCandidates(taggedCandidateLines(candidates))
             repaintSuggestions(candidates)
         }
@@ -1460,6 +1535,42 @@ class AssistantService : Service() {
         return "$who：$cn"
     }
 
+    /**
+     * 局中「暂停/继续」（2026-10-26）：
+     * - 暂停：取消识别循环（停采集/推荐），保留棋谱与投屏；
+     * - 继续：重启循环，首帧**只重同步不记账**（暂停期间用 JJ 沙盘/摆子的
+     *   操作不计入棋谱，留缺口并提示）。
+     */
+    private fun onPauseToggle() {
+        if (reviewJob?.isActive == true) return
+        if (!paused) {
+            paused = true
+            autoJob?.cancel()
+            autoJob = null
+            AppLog.i("AutoLoop", "paused by user")
+            serviceScope.launch(Dispatchers.Main) {
+                overlayView?.setPaused(true)
+                overlayView?.setDegraded(null)
+                showOverlay("已暂停\n点「继续」恢复，或「结束」封存复盘")
+            }
+            return
+        }
+        paused = false
+        resumeResync = true
+        AppLog.i("AutoLoop", "resumed by user (resync only, sandbox moves not recorded)")
+        serviceScope.launch(Dispatchers.Main) {
+            overlayView?.setPaused(false)
+            showOverlay("继续：正在重同步盘面…")
+        }
+        if (ScreenCapture.isRunning) {
+            startAutoLoop()
+        } else {
+            serviceScope.launch(Dispatchers.Main) {
+                showOverlay("投屏已失效，请回主界面重新授权")
+            }
+        }
+    }
+
     /** 封存按钮：对局中=封存并复盘；复盘完成后按钮隐藏，回到只有「开局」的局前态 */
     private fun onSealButton() {
         AppLog.d("Seal", "click reviewActive=${reviewJob?.isActive}")
@@ -1513,6 +1624,8 @@ class AssistantService : Service() {
         }
         // 棋谱快照与状态标志同步落定:复盘启动瞬间按钮就切「复盘中…」,
         // 复盘期间所有点击被 onSealButton 的 review 检查拦下,不丢不误触
+        paused = false
+        resumeResync = false
         val moves = recorder.movesSnapshot()
         val userIsRed = recorder.userIsRed
         serviceScope.launch {
@@ -1603,6 +1716,7 @@ class AssistantService : Service() {
         view.setOnCloseListener { stopSelf() }
         // 直调而非 startService:后台 startService 间接层不必要,直调保证点击必达
         view.setOnSealListener { onSealButton() }
+        view.setOnPauseListener { onPauseToggle() }
         view.setOnRetriggerListener { retriggerRecognition() }        // ♟ → 对局实况页(跳棋谱/推荐/识别对照);悬浮窗權限允许后台启 Activity。
         // 「纠」→ 四下拉输入一手棋，写回棋谱/锚点并重出推荐
         view.setOnCorrectListener { showCorrectionDialog() }
@@ -1722,6 +1836,9 @@ class AssistantService : Service() {
             return
         }
         newGameRequested = true
+        paused = false
+        resumeResync = false
+        overlayView?.setPaused(false)
         // 旧局的分析结果一律作废，防止写回新局的悬浮窗
         analysisJob?.cancel()
         analysisJob = null

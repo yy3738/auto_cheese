@@ -87,6 +87,17 @@ class OverlayView(context: Context) : LinearLayout(context) {
         visibility = GONE
     }
 
+    /** 暂停/继续（局中显示；暂停后变「继续」，结束按钮变「结束」） */
+    private val pauseButton = TextView(context).apply {
+        text = "暂停"
+        setTextColor(0xFFFFFFFF.toInt())
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        gravity = Gravity.CENTER
+        setPadding(dp(9), dp(1), dp(9), dp(1))
+        background = pill(0x33FFFFFF)
+        visibility = GONE
+    }
+
     /** 纠错入口（局中显示）：单字「纠」，与「结」同排 */
     private val correctButton = TextView(context).apply {
         text = "纠"
@@ -186,6 +197,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
             addView(titleView, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
             addView(sideButton, btnLp())
             addView(newGameButton, btnLp())
+            addView(pauseButton, btnLp())
             addView(correctButton, btnLp())
             addView(liveButton, btnLp())
             addView(sealButton, btnLp())
@@ -217,10 +229,27 @@ class OverlayView(context: Context) : LinearLayout(context) {
      */
     fun setGameStarted(started: Boolean) {
         newGameButton.visibility = if (started) GONE else VISIBLE
+        pauseButton.visibility = if (started) VISIBLE else GONE
         correctButton.visibility = if (started) VISIBLE else GONE
         liveButton.visibility = if (started) VISIBLE else GONE
         sealButton.visibility = if (started) VISIBLE else GONE
         if (started) resetSealButton()
+    }
+
+    /**
+     * 暂停态切换（2026-10-26）：暂停后按钮变「继续」、封存按钮变「结束」；
+     * 「结束」与「结」是同一个动作（封存 + 复盘），只是语义更明确。
+     */
+    fun setPaused(paused: Boolean) {
+        pauseButton.text = if (paused) "继续" else "暂停"
+        sealButton.text = if (paused) "结束" else "结"
+        sealButton.setTextColor(colorNavy)
+        sealButton.setPadding(dp(9), dp(1), dp(9), dp(1))
+        sealButton.background = pill(0xFFFFFFFF)
+    }
+
+    fun setOnPauseListener(listener: () -> Unit) {
+        pauseButton.setOnClickListener { listener() }
     }
 
     /** 标题栏藏蓝底要盖住卡片圆角外的直角:圆角只有顶部两角 */
@@ -343,6 +372,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
     /** 复盘进行中:按钮转灰蓝"复盘中",明确反馈已受理(完成时回到「开局」态) */
     fun showReviewingMode() {
         newGameButton.visibility = GONE
+        pauseButton.visibility = GONE
         correctButton.visibility = GONE
         liveButton.visibility = GONE
         sealButton.visibility = VISIBLE
@@ -355,6 +385,7 @@ class OverlayView(context: Context) : LinearLayout(context) {
     /** 复盘进度:按钮直接显示「复盘X/Y」——短局 1/1 也能看出已受理并完成 */
     fun setReviewProgress(done: Int, total: Int) {
         newGameButton.visibility = GONE
+        pauseButton.visibility = GONE
         correctButton.visibility = GONE
         liveButton.visibility = GONE
         sealButton.visibility = VISIBLE

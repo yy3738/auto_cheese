@@ -1,6 +1,7 @@
 package com.cheese.assistant
 
 import android.app.Application
+import com.cheese.assistant.engine.EngineHolder
 import com.cheese.assistant.util.AppLog
 
 /**
@@ -12,5 +13,7 @@ class CheeseApp : Application() {
     override fun onCreate() {
         super.onCreate()
         AppLog.start(this)
+        // 进程级引擎预热（S4）：用户打开 App 就开始加载 NNUE，点开局时多半已就绪
+        EngineHolder.prewarm(this)
     }
 }

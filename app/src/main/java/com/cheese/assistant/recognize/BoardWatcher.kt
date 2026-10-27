@@ -52,6 +52,12 @@ class BoardWatcher(
      * 采集不可用时自动回退旧的 captureStable 双帧等待。
      */
     private val enableCellStream: Boolean = true,
+    /**
+     * 屏幕是否可交互（亮屏且未锁屏）。长考时手机常自动熄屏，
+     * 投屏只剩黑帧——若不拦住，credibility 连续失败会重置锚点，
+     * 亮屏后棋谱与识别就对不上（2026-10-27 实机反馈）。
+     */
+    private val interactiveCheck: (() -> Boolean)? = null,
 ) {
 
     companion object {
@@ -207,6 +213,9 @@ class BoardWatcher(
     /** 最近一帧稳定画面：静止棋盘 ImageReader 不推新帧时复用它继续识别 */
     private var lastBmp: Bitmap? = null
 
+    /** 熄屏暂停状态（日志限频） */
+    private var screenOffPaused = false
+
     /** 细胞状态流（S1b）；启动失败每 5s 重试一次（投屏重授权后能自愈） */
     private var streamAttemptAt = 0L
     private var cellStreamOn = false
@@ -252,6 +261,18 @@ class BoardWatcher(
 
     fun waitForPosition(timeoutMs: Long = STABLE_TIMEOUT_MS): Observed? {
         var prunedThisFrame = false
+        // 熄屏/锁屏：长考时手机自动灭屏，投屏只有黑帧。直接暂停识别，
+        // 不递增失败计数、不重置锚点（否则亮屏后盘面/棋谱对不上）。
+        if (interactiveCheck?.invoke() == false) {
+            if (cellStreamOn) ScreenCapture.clearSettles()
+            if (!screenOffPaused) {
+                screenOffPaused = true
+                AppLog.i("BoardWatcher", "screen off/locked, recognition paused (anchor kept)")
+            }
+            Thread.sleep(300)
+            return null
+        }
+        screenOffPaused = false
         // 前台判定主轨: 非对局前台 → 暂停(不截帧不喂引擎)
         if (foregroundCheck?.invoke() == false) {
             if (cellStreamOn) ScreenCapture.clearSettles()

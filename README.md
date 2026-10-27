@@ -20,9 +20,15 @@
   不弹识别提示；点「开局」才开始记账
 - **结 → 复盘 → 回开局闭环**：对局中点「结」封存入库 → 逐局面深搜复盘
   打分（按钮实时「复盘X/Y」）→ 完成后回到局前态，点「开局」开新局
+- **暂停/继续/结束**：局中可暂停（停采集与推荐、保留棋谱和投屏），
+  方便切 App 或用 JJ 沙盘；「继续」只重同步、不把暂停期间的走子记账；
+  「结束」= 封存并复盘
 - **多步确认**：一次落定里出现 3-4 手且有多种合法解释时，弹列表式候选
   （如 `① 红 车四进一 → 黑 卒7进1`）让你点选，确认结果同时作为重训样本
 - **知识库**：Zobrist 局面指纹 + Room 持久化，复盘过的局面再次出现直接秒回
+- **引擎进程级预热**：App 启动即加载 NNUE（模拟器约 15s），主界面/悬浮窗
+  共用一个引擎；加载中显示「引擎预热中 Xs」；每手推荐**只出一次结果**
+  （1200ms 搜索），不会先出一批再换一批
 - **内置日志落盘**：`AppLog` 全量业务日志写 `files/logs/`，崩溃堆栈同步落盘
   （进程启动即开启，授权页等早期崩溃也留证）；主界面「导出日志」一键复制到
   `下载/象棋助手日志/`，无需 adb
@@ -47,7 +53,8 @@ gradle assembleDebug        # NNUE 权重 ~50MB 已打包在 app/src/main/assets
    大小后需重校
 2. 回主界面点右下朱红圆钮「开始实战辅助」→ 按提示授予「使用情况访问」
    与截屏权限（Android 14+ 每次开启都要确认一次）→ 悬浮窗自动出现
-3. 切到 JJ 对局，点悬浮窗「开局」→ 出推荐；走完一局点「结」复盘
+3. 切到 JJ 对局，点悬浮窗「开局」→ 出推荐；局中可点「暂停」切到别的
+   App 或用 JJ 沙盘（暂停期间的走子不记账），回来后「继续」或「结束」复盘
 4. 圆钮是开关：运行中显示「停止实战辅助」，停止会释放投屏，再次开启
    需重新授权
 
@@ -63,9 +70,11 @@ gradle assembleDebug        # NNUE 权重 ~50MB 已打包在 app/src/main/assets
 | [docs/features-and-roadmap.md](docs/features-and-roadmap.md) | 功能清单与路线图（需求口径） |
 | [docs/development-lessons.md](docs/development-lessons.md) | 开发对话中沉淀的工程经验 |
 | [docs/recurring-issues.md](docs/recurring-issues.md) | 复发问题登记册（症状→病因速查，排障先看） |
+| [docs/roadmap-2026-10-next.md](docs/roadmap-2026-10-next.md) | 下一阶段计划：暂停/异步复盘/复盘回放/浮窗 UI |
 | [docs/charcnn-upgrade.md](docs/charcnn-upgrade.md) | CNN 迁移设计与数据标注口径 |
 | [docs/overlay-auto-recognize-status.md](docs/overlay-auto-recognize-status.md) | 自动识别排查史（归档） |
 | [CONTEXT.md](CONTEXT.md) | 领域语言与概念定义 |
+| `archive/`（本地，不进仓库） | 2026-10 诊断日志、旧模型审图、Pikafish 发行包；文档里引用的 `_*.log` 都在 `archive/logs-2026-10/` |
 | [docs/adr/](docs/adr/) | 架构决策记录（引擎选型/模板匹配/知识库） |
 
 ## 技术选型

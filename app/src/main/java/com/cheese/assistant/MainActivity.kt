@@ -16,7 +16,7 @@ import androidx.lifecycle.lifecycleScope
 import com.cheese.assistant.board.MoveFormatter
 import com.cheese.assistant.board.Piece
 import com.cheese.assistant.board.Position
-import com.cheese.assistant.engine.SearchController
+import com.cheese.assistant.engine.EngineHolder
 import com.cheese.assistant.service.AssistantService
 import com.cheese.assistant.ui.BoardView
 import kotlinx.coroutines.Dispatchers
@@ -31,7 +31,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var fenView: EditText
     private lateinit var btnAnalyze: Button
 
-    private var controller: SearchController? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -256,21 +255,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun analyze() {
-        val ctl = controller
-        if (ctl == null) {
-            resultView.text = "引擎启动中..."
-            lifecycleScope.launch {
-                controller = SearchController().also { c ->
-                    val ok = c.start(applicationContext)
-                    resultView.text = if (ok) "引擎已就绪，再点一次分析" else "引擎初始化失败"
-                }
-            }
-            return
-        }
         val fen = boardView.position.toFen()
         btnAnalyze.isEnabled = false
         lifecycleScope.launch {
             try {
+                if (!EngineHolder.isReady) {
+                    resultView.text = "引擎预热中 ${EngineHolder.loadingSeconds()}s…"
+                }
+                val ctl = EngineHolder.ensure(applicationContext)
+                if (ctl == null) {
+                    resultView.text = "引擎初始化失败：${EngineHolder.lastError ?: "未知原因"}"
+                    return@launch
+                }
                 val result = ctl.search(fen)
                 resultView.text = result.candidates.joinToString("\n") { c ->
                     val score = c.mateIn?.let { if (it > 0) "杀! $it" else "被杀 $it" }
@@ -286,7 +282,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        controller?.shutdown()
+        // 引擎是进程级（EngineHolder），退出主界面不释放
         super.onDestroy()
     }
 }

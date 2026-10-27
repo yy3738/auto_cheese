@@ -293,3 +293,16 @@ UCI 层做的初始化（startTime / 合法局面 / 选项），否则引擎行�
 **修复**：授权页只转交 `resultCode+data`，服务在自己的 FGS 生命周期里创建
 投屏；注册回调；`onDestroy` 释放投屏；按钮文字跟随状态 + 停止 Toast；
 投屏失败弹 Toast 并落日志。
+
+## 19. 推荐区出现"上一步"的走法（2026-10-26）
+
+**症状**：对手落子后，悬浮窗短暂（或较长时间）显示的是**你走之前**的推荐，
+不是当前局面的推荐。
+
+**实测链路**（17:42 日志）：`step:` → `postAnalysis turn=false`（推荐区切
+"对手回合"文本）→ 下一帧局面没变 → `restore suggestions after screen switch`
+用全局 `lastSuggestions` 回填 → 刷回上一步推荐。dedup 命中时同样。
+
+**修复**：`suggestionCache` 以 `fen|轮到用户` 为键缓存最近 8 组候选；
+恢复只显示与当前局面匹配的一组；库补齐同键缓存。日志
+`restore suggestions (position match)` / `dedup hit ... re-posting n=`。

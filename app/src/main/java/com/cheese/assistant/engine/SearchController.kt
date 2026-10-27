@@ -117,7 +117,11 @@ class SearchController(
 
     /** 对给定 FEN 做 movetime 限时搜索。非法局面（如缺王）返回空结果而非崩溃。
      *  multiPv 覆盖本局的 MultiPV（复盘需要更宽候选把用户着法包进来），随后恢复。 */
-    suspend fun search(fen: String, movetime: Int = movetimeMs, multiPv: Int = this.multiPv): SearchResult {
+    suspend fun search(
+        fen: String,
+        movetime: Int = movetimeMs,
+        multiPv: Int = this.multiPv,
+    ): SearchResult {
         val e = engine ?: error("engine not started")
         return if (multiPv != this@SearchController.multiPv) {
             searchMutex.withLock {

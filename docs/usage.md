@@ -54,12 +54,16 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 悬浮窗默认停在棋盘下方中央（避开识别区）,可拖动。
 
 - **标题栏（局前）**：`弈枰 | 红/黑 | 开局 | ✕`
-  **标题栏（局中）**：`弈枰 | 红/黑 | 纠 | 实 | 结 | ✕`
+  **标题栏（局中）**：`弈枰 | 红/黑 | 暂停 | 纠 | 实 | 结 | ✕`
+  **标题栏（已暂停）**：`弈枰 | 红/黑 | 继续 | 纠 | 实 | 结束 | ✕`
   点「红/黑」可手动翻转执方（一般是自动识别的,识别错时才用手动）;
   **点「开局」以当前盘面作为新局起点、清旧谱并重出推荐**,点后「开局」
   消失,只剩「纠/实/结」;点「纠」输入实际走子纠正识别;点「实」看棋谱/
   识别对照;点「结」封存并复盘,按钮依次为 `结 → 复盘中 → 复盘X/Y`，
   复盘完成后回到局前态（只剩「开局」）。
+  **暂停（2026-10-26）**：点「暂停」停止采集与推荐（省电、方便切 App 或
+  用 JJ 沙盘），棋谱与投屏保留；点「继续」以当前盘面重同步——**暂停期间
+  的走子不记账**（悬浮窗提示"已重同步"）；点「结束」= 封存并复盘。
   标题栏空白处点一下收起为小圆点,再点圆点展开。悬浮窗默认贴屏幕最左、
   在棋盘下缘之外,整体比旧版更紧凑
 - **局前不识别**：没点「开局」时识别循环不启动——不抓帧、不跑 CNN、
@@ -69,7 +73,9 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   点一条即按它记账；20 秒未选按第 1 条。平台（中间稳定帧）能唯一确定时
   不弹窗、自动记账
 - **推荐区**：三条候选,普通=灰色序号,打吃=藏蓝「吃」徽章,
-  将军=朱红「将」徽章;首行常年显示上一手（「你：炮二平五」/「对手：…」）
+  将军=朱红「将」徽章;首行常年显示上一手（「你：炮二平五」/「对手：…」）。
+  **每个局面只出一次结果**（约 1.2s 搜索），不会先出一批再换一批；
+  引擎还在加载时正文显示「引擎预热中 Xs」
 - **浮窗纠错（2026-10-22）**：发现识别错/漏一手时点「纠」→ 四个下拉
   `[红/黑棋子][起始纵线 1-9][进/退/平][目标纵线或步数]`（纵线统一从
   屏幕右侧数 1-9）。程序自动判断：能从当前棋谱局面走=「补上这一步」,
@@ -118,7 +124,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 - 拉取（整目录）：
 
 ```bash
-adb -s 127.0.0.1:5555 exec-out run-as com.cheese.assistant   tar -C files -cf - labels dump > "E:\learn\auto_cheese\labels.tar"
+adb -s <序列号> exec-out run-as com.cheese.assistant   tar -C files -cf - labels dump > "labels.tar"
 ```
 
 ## 7. 卡死 / 异常排障（内置日志）
@@ -128,9 +134,9 @@ adb -s 127.0.0.1:5555 exec-out run-as com.cheese.assistant   tar -C files -cf - 
 
 ```bash
 # 列出日志
-adb -s 127.0.0.1:5555 shell "run-as com.cheese.assistant ls -t files/logs"
+adb -s <序列号> shell "run-as com.cheese.assistant ls -t files/logs"
 # 导出最新一份
-adb -s 127.0.0.1:5555 exec-out run-as com.cheese.assistant \
+adb -s <序列号> exec-out run-as com.cheese.assistant \
   cat files/logs/<文件名> > 弈枰日志.txt
 ```
 
